@@ -1,0 +1,57 @@
+{
+  "name": "@mokouliszt/mel-device",
+  "version": "0.3.0",
+  "description": "Model-aware Mitsubishi MELSEC and MELFA device notation validator.",
+  "license": "MIT",
+  "author": "mokouliszt",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "README.ja.md",
+    "LICENSE",
+    "docs/manual-evidence.md"
+  ],
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "npm run build && node --test",
+    "prepack": "npm test"
+  },
+  "keywords": [
+    "mitsubishi",
+    "melsec",
+    "plc",
+    "device",
+    "iq-r",
+    "iq-f",
+    "mx-r",
+    "mx-f",
+    "cr800",
+    "melfa"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "sideEffects": false,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mokouliszt/mel-device.git"
+  },
+  "bugs": {
+    "url": "https://github.com/mokouliszt/mel-device/issues"
+  },
+  "homepage": "https://github.com/mokouliszt/mel-device#readme"
+}

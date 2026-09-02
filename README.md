@@ -1,0 +1,216 @@
+# @mokouliszt/mel-device
+
+[日本語](README.ja.md)
+
+A dependency-free npm package for validating Mitsubishi Electric MELSEC/MX controller and MELFA robot controller device notation against a specified series and CPU/controller model.
+
+Supported series are iQ-R, iQ-F, MX-R, MX-F, and CR800-R/D/Q. The package supports both ES Modules and CommonJS.
+
+## Installation
+
+```bash
+npm install @mokouliszt/mel-device
+```
+
+## Basic usage
+
+```js
+import { isValidDevice, analyzeDevice } from "@mokouliszt/mel-device";
+
+isValidDevice("X0", {
+  series: "iQ-R",
+  model: "R00"
+}); // true (normalized to R00CPU)
+
+isValidDevice("D0.A", {
+  series: "iQ-F",
+  model: "FX5S"
+}); // true
+
+analyzeDevice("D12288", {
+  series: "iQ-R",
+  model: "R00",
+  mode: "default"
+});
+// {
+//   valid: false,
+//   code: "REQUIRES_CONFIGURATION",
+//   suggestedMode: "maximum",
+//   ...
+// }
+
+isValidDevice("U3E0\\G524287", {
+  series: "CR800-R"
+}); // true (model inferred from series)
+```
+
+Instead of returning only `true` or `false`, `analyzeDevice` reports the normalized model, parsed device, reason for failure, referenced manual and page, and whether the result depends on the actual hardware configuration. It is the recommended API for validating user input.
+
+The `model` option may be omitted only when `series` is set directly to `CR800-R`, `CR800-D`, or `CR800-Q`. A model must still be specified for all other series.
+
+## Validation modes
+
+The number of available points for PLC devices such as M and D can be changed in the CPU parameters, so the valid range on actual hardware cannot always be determined from the model alone. This package makes that distinction explicit through validation modes.
+
+| `mode` | Use case | Behavior |
+| --- | --- | --- |
+| `default` | Conservative general-purpose validation (default) | Validates against the default point counts stated in the manuals. Because the referenced iQ-F manuals do not include a default point-count table, iQ-F devices are checked against the model-specific usage range and return `configurationDependent: true`. |
+| `maximum` | Design and configuration screens | Validates against the maximum configurable limits stated in the manuals. Actual limits may be lower depending on memory, label usage, expansion SRAM, and other factors. |
+| `configured` | Exact validation for an actual project | Validates against the actual point counts supplied in `configuredPoints`. Returns `MISSING_CONFIGURATION` if the point count for a configurable device is omitted. |
+| `syntax` | In-progress editor input and syntax checking | Checks only whether the model supports the device syntax and ignores point-count ranges. |
+
+The device ranges for CR800-R/D/Q are fixed in the manuals, so `default`, `maximum`, and `configured` all use the same fixed ranges.
+
+```js
+isValidDevice("D99", {
+  series: "MX-F",
+  model: "MXF100",
+  mode: "configured",
+  configuredPoints: { D: 100 }
+}); // true
+
+isValidDevice("D100", {
+  series: "MX-F",
+  model: "MXF100",
+  mode: "configured",
+  configuredPoints: { D: 100 }
+}); // false (100 points cover D0 through D99)
+```
+
+## Input modes
+
+`inputMode: "exact"` is the default. It requires uppercase, half-width characters, and the `\` separator used in the manuals.
+
+For user-entered UI input, `friendly` is convenient. It normalizes leading and trailing whitespace, lowercase characters, full-width alphanumeric characters, and `¥` / `￥`.
+
+```js
+analyzeDevice("  u1￥g0  ", {
+  series: "iQ-F",
+  model: "FX5U",
+  inputMode: "friendly"
+}).normalized; // "U1\\G0"
+```
+
+## Main supported notation
+
+- Direct devices: `X0`, `DX0`, `DY0`, `M0`, `D0`, `W0`, `SM400`
+- Bit specification for word devices: `D0.A`
+- Timer/counter contacts, coils, and current values: `TS0`, `TC0`, `TN0`, `LCS0`, etc.
+- Module access: `U1\G0`
+- CPU buffer memory access: `U3E0\G0`
+- Link direct devices: `J1\X0`, `J1\W0`
+- Digit specification: `K4M100`
+- Indirect specification: `@D10`, `@D10.8`
+- Index modification: `D10Z2.0`, `D10.8Z2`, `D0LZ0`
+- Local devices: `#M0` (supported series/devices only)
+
+## MELFA CR800
+
+The recommended notation separates the parent series from the controller type.
+
+```js
+analyzeDevice("U3E1\\HG100", {
+  series: "CR800",
+  model: "CR800-D",
+  operation: "write"
+});
+// valid: true (valid as device notation)
+// access: "read-only"
+// operationAllowed: false (this area is an always-enabled sequencer link input)
+```
+
+The shorthand series values `"CR800-R"`, `"CR800-D"`, and `"CR800-Q"` are also accepted; `model` may be omitted in that form. The model may also be specified as `R`, `D`, or `Q`.
+
+| Model | Supported devices and fixed ranges |
+| --- | --- |
+| CR800-R | `X0-XFFF`, `Y0-YFFF`, `M0-M18431`, `D0-D5119`, `SM0-SM4095`, `SD0-SD4095`, `U3E0-U3E3\G0-G524287`, `U3E0-U3E3\HG0-HG12287` |
+| CR800-D | `X0-X1FFF`, `Y0-Y1FFF`, `D0-D5119`, `SM0-SM4095`, `SD0-SD4095`, `U3E0/U3E1\HG0-HG2047` |
+| CR800-Q | `X0-XFFF`, `Y0-YFFF`, `M0-M18431`, `D0-D5119`, `SM0-SM2047`, `SD0-SD2047`, `U3E0-U3E3\G10000-G24335` |
+
+### Read/write attribute validation
+
+Tables 6-14 through 6-16 of the instruction manual identify areas that become read-only while particular functions are assigned, even when the addresses remain within the fixed device ranges. Writes to these areas are ignored. `isValidDevice` validates the device notation and fixed range, while `analyzeDevice` separately returns the following fields:
+
+- `access`: `read-write` / `read-only` / `configuration-dependent`
+- `operationAllowed`: `true` or `false` for `operation: "read" | "write"`; `null` when the configuration is unknown
+- `activeAllocations`, `possibleAllocations`, `warnings`: allocations used as the basis for the result
+
+If the actual hardware configuration is known, pass it through `cr800Features`. Omitted properties are treated as unknown and conservatively return `configuration-dependent`.
+
+```js
+analyzeDevice("U3E1\\HG600", {
+  series: "CR800-D",
+  operation: "write",
+  cr800Features: { iqmem: false }
+}).operationAllowed; // true (freely readable/writable when the expansion is disabled)
+
+analyzeDevice("U3E1\\HG600", {
+  series: "CR800-D",
+  operation: "write",
+  cr800Features: { iqmem: true }
+}).operationAllowed; // false
+```
+
+The following settings are supported:
+
+| `cr800Features` | Applies to | Meaning |
+| --- | --- | --- |
+| `qxyread` | R/Q | Direct control of sequencer I/O units |
+| `iqmem` | R/D/Q | CPU buffer/shared-memory expansion |
+| `ddevvl` | R/D/Q | `"disabled"`, `"program-external"`, `"status"`, `"mixed"` |
+| `parallelIoUnit`, `parallelIoInterface`, `gotLink` | D | Parallel I/O and GOT link |
+| `profibus`, `ccLink`, `ccLinkIef` | D | Network functions |
+
+Examples of always-enabled areas include `U3E1\HG0-HG511` on CR800-D, `U3E1-U3E3\HG0-HG511` on CR800-R, and `U3E1-U3E3\G10000-G10511` on CR800-Q. These areas are read-only from external devices. Hand inputs `X384-X38B` are also read-only. In contrast, areas for disabled or unassigned functions may be freely read and written as described in the manual notes.
+
+The `U3En\G512-G1023` range in Table 6-16 for CR800-Q conflicts with the fixed `G10000-G24335` range in Table 6-13 and with the correspondence tables in Sections 5.2.1 and 6.2.2. To avoid false-positive validation, this package treats that notation as invalid with `MANUAL_RANGE_CONFLICT`. It also does not make a definitive claim about the IQMEM read/write attributes of the `G10512-G11023` range, instead reporting them as `configuration-dependent`.
+
+Bit specifications, digit specifications, indirect specifications, index modifications, and local specifications that are not listed in Tables 6-11 through 6-13 are conservatively treated as invalid for CR800.
+
+Constants (`K100`, `HFF`, real numbers, and strings) are outside the validation scope because they are not devices. Labels, structure members, and SLMP binary device codes are also outside the scope.
+
+## API
+
+### `isValidDevice(value, options): boolean`
+
+Returns a simple Boolean validation result.
+
+### `analyzeDevice(value, options): DeviceAnalysis`
+
+Returns a detailed validation result. The main fields are `valid`, `code`, `message`, `normalized`, `parsed`, `configurationDependent`, and `source`.
+
+### `assertValidDevice(value, options): DeviceAnalysis`
+
+Throws `MelDeviceError` when the device is invalid.
+
+### `parseDevice(value, options): ParsedDevice | null`
+
+Parses the notation into its components. It does not validate ranges for a series or model.
+
+### `normalizeDevice(value): string | null`
+
+Normalizes human-entered notation.
+
+### `normalizeModel(series, model): string | null`
+
+Normalizes a model name for validation, such as `R00` → `R00CPU` or a specific iQ-F model name → `FX5U`.
+
+### `getSupportedModels(series): string[]`
+
+Returns the list of models covered by the manuals.
+
+## Supported models
+
+- iQ-R: R00CPU, R01CPU, R02CPU, R04/R08/R16/R32/R120 CPUs, and ENCPUs
+- iQ-F: FX5S, FX5UJ, FX5U, and FX5UC (specific I/O model names are normalized to their families)
+- MX-R: MXR300-16/-32/-64 and MXR500-128/-256
+- MX-F: the 10 models covered by the MXF100-series manual (`MXF100` is accepted as a family alias)
+- MELFA CR800: CR800-R, CR800-D, and CR800-Q
+
+## References
+
+The validation tables and their supporting manual numbers, editions, and page references are documented in the bundled [manual-evidence.md](docs/manual-evidence.md).
+
+## License
+
+MIT
