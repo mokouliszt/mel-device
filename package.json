@@ -1,6 +1,6 @@
 {
   "name": "@mokouliszt/mel-device",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Model-aware Mitsubishi MELSEC and MELFA device notation validator.",
   "license": "MIT",
   "author": "mokouliszt",

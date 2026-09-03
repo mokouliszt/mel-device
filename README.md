@@ -97,12 +97,25 @@ analyzeDevice("  u1￥g0  ", {
 - Bit specification for word devices: `D0.A`
 - Timer/counter contacts, coils, and current values: `TS0`, `TC0`, `TN0`, `LCS0`, etc.
 - Module access: `U1\G0`
-- CPU buffer memory access: `U3E0\G0`
+- CPU buffer memory access: `U3E0\G0`, `U3E0\HG0`
 - Link direct devices: `J1\X0`, `J1\W0`
 - Digit specification: `K4M100`
 - Indirect specification: `@D10`, `@D10.8`
 - Index modification: `D10Z2.0`, `D10.8Z2`, `D0LZ0`
 - Local devices: `#M0` (supported series/devices only)
+
+### Module and CPU buffer access limits
+
+The head I/O number, the CPU selector, and the address are all validated against the ranges printed in the manuals. The `G` buffer-memory area and the `HG` cyclic-transmission area have separate limits, and the `HG` area is not listed for MX-R or MX-F at all.
+
+| Series | `Un\G` head I/O number | `U3En\G` | `U3En\HG` |
+| --- | --- | --- | --- |
+| iQ-R | `U00`-`UFF` | `U3E0`-`U3E3`, address `0`-`268435455` | `U3E0`-`U3E3`, address `0`-`12287` |
+| iQ-F | not stated in the manual (unchecked) | not supported | not supported |
+| MX-R | `U00`-`UFF` | `U3E0`, address `0`-`524287` | not listed in the manual |
+| MX-F | `U01`-`UFE` | `U3E0`, address `0`-`16809983` | not listed in the manual |
+
+CR800 uses its own fixed table; see the section below.
 
 ## MELFA CR800
 

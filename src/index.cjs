@@ -112,6 +112,28 @@ const SOURCES = {
   CR800: { manual: "BFP-A3477-AB", pages: [489, 490, 491, 618, 619, 654, 655, 656, 657] }
 };
 
+// CPU buffer memory access devices (U3En\G, U3En\HG).
+// iQ-R SH-082487-J p.433 lists CPU No.1-4 as 3E0-3E3 and separates the G area
+// (0-268435455) from the HG cyclic-transmission area (max 12288 points, p.408).
+// MX-R SH-082640-D p.377/378 and MX-F SH-082633-E p.442/443 only document the
+// 3E0 CPU function part, and neither manual mentions the HG area at all.
+const CPU_BUFFER_RULES = {
+  "iQ-R": { units: [0, 1, 2, 3], G: 268435455, HG: 12287 },
+  "MX-R": { units: [0], G: 524287 },
+  "MX-F": { units: [0], G: 16809983 }
+};
+
+// Unit access devices (Un\G). unitMin/unitMax are the documented head I/O
+// number ranges: iQ-R p.432 and MX-R p.376 give 00H-FFH, MX-F p.441 gives
+// 01H-FEH. The iQ-F manual (p.68) does not state a unit-number range, so the
+// unit number is left unchecked for that series.
+const UNIT_ACCESS_RULES = {
+  "iQ-R": { unitMin: 0x00, unitMax: 0xff, address: 268435455 },
+  "MX-R": { unitMin: 0x00, unitMax: 0xff, address: 268435455 },
+  "MX-F": { unitMin: 0x01, unitMax: 0xfe, address: 268435455 },
+  "iQ-F": { unitMin: null, unitMax: null, address: 268435455 }
+};
+
 const CR800_RULES = {
   "CR800-R": {
     direct: { X: [0, 0xfff], Y: [0, 0xfff], M: [0, 18431], D: [0, 5119], SM: [0, 4095], SD: [0, 4095] },
@@ -615,12 +637,32 @@ function analyzeDevice(value, options = {}) {
     return { valid: true, input: value, normalized, series, model, mode, code: "VALID", message: "Valid link-direct device notation; the actual range depends on the configured network.", configurationDependent: true, parsed, source: SOURCES[series] };
   }
 
-  if (parsed.kind === "unit" || parsed.kind === "cpu-buffer") {
-    const maxAddress = parsed.kind === "cpu-buffer"
-      ? series === "MX-R" ? 524287 : series === "MX-F" ? 16809983 : 268435455
-      : 268435455;
-    if (parsed.address > maxAddress) return invalid(value, series, model, mode, "ADDRESS_OUT_OF_RANGE", `Buffer-memory address must be 0-${maxAddress}.`, { normalized, parsed });
-    return { valid: true, input: value, normalized, series, model, mode, code: "VALID", message: "Valid access-device notation; existence and actual range depend on the installed unit or CPU buffer.", configurationDependent: true, parsed, source: SOURCES[series] };
+  if (parsed.kind === "cpu-buffer") {
+    const rule = CPU_BUFFER_RULES[series];
+    const maxAddress = rule[parsed.prefix];
+    if (maxAddress === undefined) {
+      return invalid(value, series, model, mode, "DEVICE_NOT_SUPPORTED", `U3En\\${parsed.prefix} is not listed as a ${series} device in the attached manual.`, { normalized, parsed });
+    }
+    if (!rule.units.includes(parsed.cpu)) {
+      return invalid(value, series, model, mode, "CPU_NUMBER_OUT_OF_RANGE", `U3E${parsed.cpu.toString(16).toUpperCase()} is not a documented CPU selector for ${series}.`, { normalized, parsed });
+    }
+    if (parsed.address > maxAddress) {
+      return invalid(value, series, model, mode, "ADDRESS_OUT_OF_RANGE", `U3En\\${parsed.prefix} address must be 0-${maxAddress}.`, { normalized, parsed });
+    }
+    return { valid: true, input: value, normalized, series, model, mode, code: "VALID", message: "Valid CPU-buffer access notation; the actual usable range depends on the refresh and multiple-CPU configuration.", configurationDependent: true, parsed, source: SOURCES[series] };
+  }
+
+  if (parsed.kind === "unit") {
+    const rule = UNIT_ACCESS_RULES[series];
+    if (rule.unitMin !== null && (parsed.unit < rule.unitMin || parsed.unit > rule.unitMax)) {
+      return invalid(value, series, model, mode, "UNIT_NUMBER_OUT_OF_RANGE",
+        `U${parsed.unit.toString(16).toUpperCase()} is outside the documented ${series} head I/O number range ${rule.unitMin.toString(16).toUpperCase().padStart(2, "0")}H-${rule.unitMax.toString(16).toUpperCase()}H.`,
+        { normalized, parsed });
+    }
+    if (parsed.address > rule.address) {
+      return invalid(value, series, model, mode, "ADDRESS_OUT_OF_RANGE", `Buffer-memory address must be 0-${rule.address}.`, { normalized, parsed });
+    }
+    return { valid: true, input: value, normalized, series, model, mode, code: "VALID", message: "Valid access-device notation; existence and actual range depend on the installed unit.", configurationDependent: true, parsed, source: SOURCES[series] };
   }
 
   if (mode === "syntax") {

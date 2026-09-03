@@ -110,6 +110,46 @@ test("validates unit and link access with model conditions", () => {
   assert.equal(isValidDevice("J0\\W0", { series: "iQ-R", model: "R08" }), false);
 });
 
+test("separates the CPU buffer G area from the HG cyclic-transmission area", () => {
+  const options = { series: "iQ-R", model: "R08CPU" };
+  assert.equal(isValidDevice("U3E0\\G268435455", options), true);
+  assert.equal(isValidDevice("U3E0\\G268435456", options), false);
+  assert.equal(isValidDevice("U3E0\\HG12287", options), true);
+  assert.equal(analyzeDevice("U3E0\\HG12288", options).code, "ADDRESS_OUT_OF_RANGE");
+  assert.equal(analyzeDevice("U3E0\\HG268435455", options).code, "ADDRESS_OUT_OF_RANGE");
+});
+
+test("restricts CPU buffer selectors to the documented CPU numbers", () => {
+  const iqr = { series: "iQ-R", model: "R08CPU" };
+  assert.equal(isValidDevice("U3E3\\G0", iqr), true);
+  assert.equal(analyzeDevice("U3E4\\G0", iqr).code, "CPU_NUMBER_OUT_OF_RANGE");
+  assert.equal(analyzeDevice("U3EF\\HG0", iqr).code, "CPU_NUMBER_OUT_OF_RANGE");
+
+  const mxr = { series: "MX-R", model: "MXR300-16" };
+  assert.equal(isValidDevice("U3E0\\G524287", mxr), true);
+  assert.equal(isValidDevice("U3E0\\G524288", mxr), false);
+  assert.equal(analyzeDevice("U3E1\\G0", mxr).code, "CPU_NUMBER_OUT_OF_RANGE");
+
+  const mxf = { series: "MX-F", model: "MXF100" };
+  assert.equal(isValidDevice("U3E0\\G16809983", mxf), true);
+  assert.equal(analyzeDevice("U3E1\\G0", mxf).code, "CPU_NUMBER_OUT_OF_RANGE");
+});
+
+test("rejects the HG area for series whose manuals do not list it", () => {
+  assert.equal(analyzeDevice("U3E0\\HG0", { series: "MX-R", model: "MXR300-16" }).code, "DEVICE_NOT_SUPPORTED");
+  assert.equal(analyzeDevice("U3E0\\HG0", { series: "MX-F", model: "MXF100" }).code, "DEVICE_NOT_SUPPORTED");
+});
+
+test("validates documented unit access head I/O numbers", () => {
+  assert.equal(isValidDevice("UFF\\G0", { series: "iQ-R", model: "R08CPU" }), true);
+  assert.equal(analyzeDevice("U100\\G0", { series: "iQ-R", model: "R08CPU" }).code, "UNIT_NUMBER_OUT_OF_RANGE");
+  assert.equal(isValidDevice("UFE\\G0", { series: "MX-F", model: "MXF100" }), true);
+  assert.equal(analyzeDevice("UFF\\G0", { series: "MX-F", model: "MXF100" }).code, "UNIT_NUMBER_OUT_OF_RANGE");
+  assert.equal(analyzeDevice("U0\\G0", { series: "MX-F", model: "MXF100" }).code, "UNIT_NUMBER_OUT_OF_RANGE");
+  // The iQ-F manual does not state a unit-number range, so it stays unchecked.
+  assert.equal(isValidDevice("U1\\G0", { series: "iQ-F", model: "FX5U" }), true);
+});
+
 test("parses supported modifier combinations", () => {
   const options = { series: "MX-R", model: "MXR500" };
   assert.equal(isValidDevice("K4M100Z2", options), true);
