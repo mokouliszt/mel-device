@@ -4,7 +4,7 @@
 
 A dependency-free npm package for validating Mitsubishi Electric MELSEC/MX controller, MELFA robot controller and FR inverter sequence-function device notation against a specified series and CPU/controller/inverter model.
 
-Supported series are iQ-R, iQ-F, MX-R, MX-F, CR800-R/D/Q, and the FR-A800/A800 Plus/F800/E800 inverter sequence function. The package supports both ES Modules and CommonJS.
+Supported series are iQ-R, iQ-F, MX-R, MX-F, CR800-R/D/Q, and the FR-A800/A800 Plus/F800/E800 inverters, covering both their sequence function and their SLMP device table. The package supports both ES Modules and CommonJS.
 
 ## Installation
 
@@ -46,7 +46,7 @@ isValidDevice("U3E0\\G524287", {
 
 Instead of returning only `true` or `false`, `analyzeDevice` reports the normalized model, parsed device, reason for failure, referenced manual and page, and whether the result depends on the actual hardware configuration. It is the recommended API for validating user input.
 
-The `model` option may be omitted when `series` is set directly to a single-model shorthand such as `CR800-R`, `CR800-D`, `CR800-Q`, `FR-A800`, `FR-F800`, or `FR-E800`. A model must still be specified for `iQ-R`, `iQ-F`, `MX-R`, `MX-F`, `CR800`, and `FR800`.
+The `model` option may be omitted when `series` is set directly to a single-model shorthand such as `CR800-R`, `CR800-D`, `CR800-Q`, `FR-A800`, `FR-A800-E`, `FR-F800`, or `FR-E800`. A model must still be specified for `iQ-R`, `iQ-F`, `MX-R`, `MX-F`, `CR800`, and `FR800`.
 
 ## Validation modes
 
@@ -59,7 +59,7 @@ The number of available points for PLC devices such as M and D can be changed in
 | `configured` | Exact validation for an actual project | Validates against the actual point counts supplied in `configuredPoints`. Returns `MISSING_CONFIGURATION` if the point count for a configurable device is omitted. |
 | `syntax` | In-progress editor input and syntax checking | Checks only whether the model supports the device syntax and ignores point-count ranges. |
 
-The device ranges for CR800-R/D/Q and for the FR inverter sequence function are fixed in the manuals, so `configuredPoints` is ignored for those series. `maximum` still differs for the inverters, because it opts into the SERIAL-dependent 32-point T/ST/C extension described below.
+The device ranges for CR800-R/D/Q and for the FR inverter sequence function are fixed in the manuals, so `configuredPoints` is ignored for those series. `maximum` still differs for the inverters, because it opts into the SERIAL-dependent 32-point T/C extension and the unallocated ST points described below. `configuredPoints.ST` is the one point count the inverters accept.
 
 ```js
 isValidDevice("D99", {
@@ -201,7 +201,8 @@ analyzeDevice("P100", { series: "FR-A800" }).code; // "DEVICE_NOT_SUPPORTED"
 | X, Y | `X0-X8F`, `Y0-Y8F` (144 points each) | same | hexadecimal |
 | M | `M0-M127` | same | decimal |
 | L | no points (a latch range can be set but nothing latches) | same | - |
-| T, ST, C | `0-15`, or `0-31` with the extension below | `0-15` | decimal |
+| T, C | `0-15`, or `0-31` with the extension below | `0-15` | decimal |
+| ST | 0 points by default; allocatable up to `0-15`, or `0-31` with the extension below | 0 points by default; allocatable up to `0-15` | decimal |
 | D | `D0-D255` | same | decimal |
 | P | not listed | `P0-P127`, `P2048-P2175` | decimal |
 | SM, SD | `0-2047` (not every number has a function) | same | decimal |
@@ -222,10 +223,59 @@ isValidDevice("T16", { series: "FR-A800", frFeatures: { extendedTimerPoints: fal
 
 | `frFeatures` | Applies to | Meaning |
 | --- | --- | --- |
-| `extendedTimerPoints` | FR-A800, FR-A800-CRN, FR-A800-LC, FR-F800 | 32-point T/ST/C extension |
+| `extendedTimerPoints` | FR-A800, FR-A800-E, FR-A800-CRN, FR-A800-LC, FR-F800, FR-F800-E | 32-point T/ST/C extension |
 | `pointerDevice` | FR-E800 family | 256-point P pointer device |
 
 Setting a feature to `true` for a model the manual does not list returns `INVALID_FR_FEATURES` rather than quietly widening the range.
+
+### The accumulating timer starts with no points
+
+The device list gives the accumulating timer ST a default of 0 points, so it is only usable once the sequence parameters allocate it. It is therefore treated like the configurable devices of the PLC series rather than like a fixed range.
+
+```js
+analyzeDevice("ST0", { series: "FR-A800" });
+// valid: false, code: "REQUIRES_CONFIGURATION", suggestedMode: "maximum"
+
+isValidDevice("ST15", { series: "FR-A800", mode: "maximum" });                                  // true (configurationDependent)
+isValidDevice("ST15", { series: "FR-A800", mode: "configured", configuredPoints: { ST: 16 } }); // true
+isValidDevice("ST16", { series: "FR-A800", mode: "configured", configuredPoints: { ST: 16 } }); // false
+```
+
+The ceiling for `configuredPoints.ST` is 16 points, or 32 on a model that has the extension above.
+
+### SLMP device table
+
+The Ethernet inverters expose a different device table to external SLMP clients. Pass `frAccess: "slmp"` to validate against it; the result then also carries the SLMP device code and access unit.
+
+```js
+analyzeDevice("X7F", { series: "FR-A800-E", frAccess: "slmp" });
+// valid: true, deviceCode: "H9C", deviceUnit: "bit"
+
+isValidDevice("X80", { series: "FR-A800-E", frAccess: "slmp" }); // false (the SLMP table stops at H7F)
+isValidDevice("X80", { series: "FR-A800-E" });                   // true  (the sequence map runs to H8F)
+```
+
+| Device | Code | Unit | Range |
+| --- | --- | --- | --- |
+| SM | `H91` | bit | `0-2047` |
+| SD | `HA9` | word | `0-2047` |
+| X | `H9C` | bit | `H0-H7F` |
+| Y | `H9D` | bit | `H0-H7F` |
+| M | `H90` | bit | `0-127` |
+| D | `HA8` | word | `0-255` |
+| W | `HB4` | word | `0-8191` (FR-E800 Ethernet models only) |
+| `TS` / `TC` / `TN` | `HC1` / `HC0` / `HC2` | bit / bit / word | `0-15` |
+| `STS` / `STC` / `STN` (`SS` / `SC` / `SN`) | `HC7` / `HC6` / `HC8` | bit / bit / word | 0 points by default, allocatable up to `0-15` |
+| `CS` / `CC` / `CN` | `HC4` / `HC3` / `HC5` | bit / bit / word | `0-15` |
+
+Points worth knowing:
+
+- SLMP access is documented for the Ethernet models only. Any other model returns `MODEL_NOT_SUPPORTED`.
+- The SLMP table addresses the contact, coil, and current value separately, so a bare `T0` is rejected with a message naming `TS0`, `TC0`, and `TN0`.
+- The accumulating-timer parts are spelled `STS`/`STC`/`STN` in the FR-A800-E/F800-E manual and `SS`/`SC`/`SN` in the FR-E800 manual. Both spellings are accepted, and a warning names the spelling the selected model's manual uses.
+- Both SLMP tables cap T/C and ST at 16 points, so `extendedTimerPoints` does not widen them.
+- The link register `W` maps to parameters and monitor data and is decimal, not hexadecimal as on the PLC series. `parseDevice("W999", { series: "FR-E800-E" })` gives address 999.
+- P, N, L, and digit designation are not part of the SLMP device table.
 
 ### Digit designation and input devices
 
@@ -286,7 +336,7 @@ Returns the list of models covered by the manuals.
 - MX-R: MXR300-16/-32/-64 and MXR500-128/-256
 - MX-F: the 10 models covered by the MXF100-series manual (`MXF100` is accepted as a family alias)
 - MELFA CR800: CR800-R, CR800-D, and CR800-Q
-- FR inverters (`FR800`): FR-A800, FR-A800-P, FR-A800-CRN, FR-A800-LC, FR-A800-Plus, FR-F800, FR-E800, FR-E800-E, FR-E800-SCE, FR-E800-NC, and FR-E806
+- FR inverters (`FR800`): FR-A800, FR-A800-E, FR-A800-P, FR-A800-CRN, FR-A800-LC, FR-A800-Plus, FR-F800, FR-F800-E, FR-E800, FR-E800-E, FR-E800-SCE, FR-E800-NC, and FR-E806
 
 ## References
 

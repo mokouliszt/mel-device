@@ -14,8 +14,8 @@ const MX_F_MODELS = [
 ];
 const CR800_MODELS = ["CR800-R", "CR800-D", "CR800-Q"];
 const FR800_MODELS = [
-  "FR-A800", "FR-A800-P", "FR-A800-CRN", "FR-A800-LC", "FR-A800-Plus",
-  "FR-F800",
+  "FR-A800", "FR-A800-E", "FR-A800-P", "FR-A800-CRN", "FR-A800-LC", "FR-A800-Plus",
+  "FR-F800", "FR-F800-E",
   "FR-E800", "FR-E800-E", "FR-E800-SCE", "FR-E800-NC", "FR-E806"
 ];
 
@@ -186,34 +186,73 @@ const FR_FEATURE_NAMES = new Set(["extendedTimerPoints", "pointerDevice"]);
 // timerPoints: [base, extended]. The 32-point T/ST/C extension is only listed
 // for FR-A800 (excluding FR-A800-P), FR-A800 Plus (FR-A800-CRN/LC) and FR-F800,
 // and only from the January 2021 production month onward (p.8).
+// timerPoints: [base, SERIAL-extended] for T and C. ST always defaults to 0
+// points (p.11 note *8) and is allocated by the sequence parameters up to the
+// same figure. slmp/linkRegister follow the Ethernet manuals; stSpelling is the
+// accumulating-timer spelling each SLMP table uses.
 const FR800_RULES = {
-  "FR-A800": { timerPoints: [16, 32], pointer: false },
-  "FR-A800-P": { timerPoints: [16, 16], pointer: false },
-  "FR-A800-CRN": { timerPoints: [16, 32], pointer: false },
-  "FR-A800-LC": { timerPoints: [16, 32], pointer: false },
-  "FR-A800-Plus": { timerPoints: [16, 16], pointer: false },
-  "FR-F800": { timerPoints: [16, 32], pointer: false },
-  "FR-E800": { timerPoints: [16, 16], pointer: true },
-  "FR-E800-E": { timerPoints: [16, 16], pointer: true },
-  "FR-E800-SCE": { timerPoints: [16, 16], pointer: true },
-  "FR-E800-NC": { timerPoints: [16, 16], pointer: true },
-  "FR-E806": { timerPoints: [16, 16], pointer: true }
+  "FR-A800": { timerPoints: [16, 32], pointer: false, slmp: false, linkRegister: false, stSpelling: "ST" },
+  "FR-A800-E": { timerPoints: [16, 32], pointer: false, slmp: true, linkRegister: false, stSpelling: "ST" },
+  "FR-A800-P": { timerPoints: [16, 16], pointer: false, slmp: false, linkRegister: false, stSpelling: "ST" },
+  "FR-A800-CRN": { timerPoints: [16, 32], pointer: false, slmp: false, linkRegister: false, stSpelling: "ST" },
+  "FR-A800-LC": { timerPoints: [16, 32], pointer: false, slmp: false, linkRegister: false, stSpelling: "ST" },
+  "FR-A800-Plus": { timerPoints: [16, 16], pointer: false, slmp: false, linkRegister: false, stSpelling: "ST" },
+  "FR-F800": { timerPoints: [16, 32], pointer: false, slmp: false, linkRegister: false, stSpelling: "ST" },
+  "FR-F800-E": { timerPoints: [16, 32], pointer: false, slmp: true, linkRegister: false, stSpelling: "ST" },
+  "FR-E800": { timerPoints: [16, 16], pointer: true, slmp: false, linkRegister: false, stSpelling: "S" },
+  "FR-E800-E": { timerPoints: [16, 16], pointer: true, slmp: true, linkRegister: true, stSpelling: "S" },
+  "FR-E800-SCE": { timerPoints: [16, 16], pointer: true, slmp: true, linkRegister: true, stSpelling: "S" },
+  "FR-E800-NC": { timerPoints: [16, 16], pointer: true, slmp: false, linkRegister: false, stSpelling: "S" },
+  "FR-E806": { timerPoints: [16, 16], pointer: true, slmp: true, linkRegister: true, stSpelling: "S" }
+};
+
+// SLMP device codes and ranges (IB-0600627-D p.37, IB-0600870-S p.132-133).
+// The SLMP tables cap T/C at 16 points and ST at 16 points regardless of the
+// 32-point sequence-function extension, and cut X/Y at H7F rather than H8F.
+const FR_SLMP_DEVICES = {
+  SM: { code: "H91", unit: "bit", max: 2047 },
+  SD: { code: "HA9", unit: "word", max: 2047 },
+  X: { code: "H9C", unit: "bit", max: 0x7f },
+  Y: { code: "H9D", unit: "bit", max: 0x7f },
+  M: { code: "H90", unit: "bit", max: 127 },
+  D: { code: "HA8", unit: "word", max: 255 },
+  W: { code: "HB4", unit: "word", max: 8191, requires: "linkRegister" },
+  TS: { code: "HC1", unit: "bit", max: 15 },
+  TC: { code: "HC0", unit: "bit", max: 15 },
+  TN: { code: "HC2", unit: "word", max: 15 },
+  STS: { code: "HC7", unit: "bit", allocated: true },
+  STC: { code: "HC6", unit: "bit", allocated: true },
+  STN: { code: "HC8", unit: "word", allocated: true },
+  CS: { code: "HC4", unit: "bit", max: 15 },
+  CC: { code: "HC3", unit: "bit", max: 15 },
+  CN: { code: "HC5", unit: "word", max: 15 }
+};
+const FR_SLMP_ST_MAX = 16;
+const FR_SLMP_SPELLING = { STS: "SS", STC: "SC", STN: "SN" };
+
+// The accumulating-timer parts are spelled STS/STC/STN in the FR-A800-E/F800-E
+// manual and SS/SC/SN in the FR-E800 manual; both spellings are accepted.
+const FR_TIMER_ALIAS = {
+  TS: ["T", "contact"], TC: ["T", "coil"], TN: ["T", "current"],
+  STS: ["ST", "contact"], STC: ["ST", "coil"], STN: ["ST", "current"],
+  SS: ["ST", "contact"], SC: ["ST", "coil"], SN: ["ST", "current"],
+  CS: ["C", "contact"], CC: ["C", "coil"], CN: ["C", "current"]
 };
 
 const FR_SERIES_ALIASES = {
   FR800: null, FR8: null,
-  FRA800: "FR-A800", FRA800P: "FR-A800-P", FRA800CRN: "FR-A800-CRN",
-  FRA800LC: "FR-A800-LC", FRA800PLUS: "FR-A800-Plus",
-  FRF800: "FR-F800",
+  FRA800: "FR-A800", FRA800E: "FR-A800-E", FRA800P: "FR-A800-P",
+  FRA800CRN: "FR-A800-CRN", FRA800LC: "FR-A800-LC", FRA800PLUS: "FR-A800-Plus",
+  FRF800: "FR-F800", FRF800E: "FR-F800-E",
   FRE800: "FR-E800", FRE800E: "FR-E800-E", FRE800SCE: "FR-E800-SCE",
   FRE800NC: "FR-E800-NC", FRE806: "FR-E806"
 };
 
 const FR_MODEL_ALIASES = {
-  A800: "FR-A800", A800P: "FR-A800-P", A800CRN: "FR-A800-CRN",
-  A800LC: "FR-A800-LC", A800PLUS: "FR-A800-Plus", CRN: "FR-A800-CRN",
-  LC: "FR-A800-LC", PLUS: "FR-A800-Plus",
-  F800: "FR-F800",
+  A800: "FR-A800", A800E: "FR-A800-E", A800P: "FR-A800-P",
+  A800CRN: "FR-A800-CRN", A800LC: "FR-A800-LC", A800PLUS: "FR-A800-Plus",
+  CRN: "FR-A800-CRN", LC: "FR-A800-LC", PLUS: "FR-A800-Plus",
+  F800: "FR-F800", F800E: "FR-F800-E",
   E800: "FR-E800", E800E: "FR-E800-E", E800SCE: "FR-E800-SCE",
   E800NC: "FR-E800-NC", E806: "FR-E806"
 };
@@ -324,6 +363,9 @@ function invalid(input, series, model, mode, code, message, extra = {}) {
 }
 
 function radixFor(series, prefix) {
+  // Both inverter manuals print X/Y in hexadecimal and every other device,
+  // including the link register W, in decimal.
+  if (series === "FR800") return prefix === "X" || prefix === "Y" ? 16 : 10;
   const radix = RADIX[prefix];
   if (radix === "series-x") return series === "iQ-F" ? 8 : 16;
   return radix || 10;
@@ -337,13 +379,14 @@ function parseNumber(text, radix) {
 }
 
 function parseDirect(text, series) {
-  const timerPrefixes = Object.keys(TIMER_ALIAS).sort((a, b) => b.length - a.length);
+  const aliases = series === "FR800" ? FR_TIMER_ALIAS : TIMER_ALIAS;
+  const timerPrefixes = Object.keys(aliases).sort((a, b) => b.length - a.length);
   for (const alias of timerPrefixes) {
     if (!text.startsWith(alias)) continue;
     const addressText = text.slice(alias.length);
     const address = parseNumber(addressText, 10);
     if (address !== null) {
-      const [prefix, timerPart] = TIMER_ALIAS[alias];
+      const [prefix, timerPart] = aliases[alias];
       return { kind: "direct", prefix, notationPrefix: alias, address, addressText, radix: 10, timerPart };
     }
   }
@@ -679,14 +722,37 @@ function validateFrFeatures(features, model) {
   return null;
 }
 
-function frRangeFor(prefix, model, mode, features) {
+function frTimerCeiling(model, mode, features) {
+  const [base, extended] = FR800_RULES[model].timerPoints;
+  const declared = typeof features.extendedTimerPoints === "boolean" ? features.extendedTimerPoints : null;
+  if (declared !== null) return { points: declared ? extended : base, dependent: false };
+  if (mode === "maximum") return { points: extended, dependent: extended !== base };
+  return { points: base, dependent: false, serialExtendedTo: extended !== base ? extended : null };
+}
+
+// Sequence-function ranges (IB-0600491-Q p.107). ST has no points until the
+// sequence parameters allocate them, so it behaves like the other configurable
+// devices in this package rather than like a fixed range.
+function frSequenceRange(prefix, model, mode, options, features) {
   const rule = FR800_RULES[model];
-  if (prefix === "T" || prefix === "ST" || prefix === "C") {
-    const [base, extended] = rule.timerPoints;
-    const declared = typeof features.extendedTimerPoints === "boolean" ? features.extendedTimerPoints : null;
-    if (declared !== null) return { ranges: [[0, (declared ? extended : base) - 1]], dependent: false };
-    if (mode === "maximum") return { ranges: [[0, extended - 1]], dependent: extended !== base };
-    return { ranges: [[0, base - 1]], dependent: false, serialExtendedTo: extended !== base ? extended - 1 : null };
+  if (prefix === "T" || prefix === "C") {
+    const ceiling = frTimerCeiling(model, mode, features);
+    return {
+      ranges: [[0, ceiling.points - 1]],
+      dependent: ceiling.dependent,
+      serialExtendedTo: ceiling.serialExtendedTo == null ? null : ceiling.serialExtendedTo - 1
+    };
+  }
+  if (prefix === "ST") {
+    const ceiling = frTimerCeiling(model, mode, features);
+    if (mode === "configured") {
+      const points = options.configuredPoints && options.configuredPoints.ST;
+      if (!Number.isInteger(points) || points < 0) return { missingConfiguration: true };
+      if (points > ceiling.points) return { invalidConfiguration: true, ceiling: ceiling.points };
+      return { ranges: [[0, points - 1]], dependent: false };
+    }
+    if (mode === "maximum") return { ranges: [[0, ceiling.points - 1]], dependent: true, allocated: true };
+    return { ranges: [], dependent: false, allocatableTo: ceiling.points - 1 };
   }
   if (prefix === "P") {
     if (!rule.pointer) return null;
@@ -697,62 +763,160 @@ function frRangeFor(prefix, model, mode, features) {
   return { ranges: [[0, limit]], dependent: false };
 }
 
+// SLMP ranges (IB-0600627-D p.37, IB-0600870-S p.132-133).
+function frSlmpRange(entry, model, mode, options) {
+  if (!entry.allocated) return { ranges: [[0, entry.max]], dependent: false };
+  if (mode === "configured") {
+    const points = options.configuredPoints && options.configuredPoints.ST;
+    if (!Number.isInteger(points) || points < 0) return { missingConfiguration: true };
+    if (points > FR_SLMP_ST_MAX) return { invalidConfiguration: true, ceiling: FR_SLMP_ST_MAX };
+    return { ranges: [[0, points - 1]], dependent: false };
+  }
+  if (mode === "maximum") return { ranges: [[0, FR_SLMP_ST_MAX - 1]], dependent: true, allocated: true };
+  return { ranges: [], dependent: false, allocatableTo: FR_SLMP_ST_MAX - 1 };
+}
+
 function frIoArea(address) {
   return FR_IO_AREAS.find(([start, end]) => address >= start && address <= end) || null;
 }
 
-function analyzeFr(value, parsed, series, model, mode, normalized, operation, features = {}) {
+function analyzeFr(value, parsed, series, model, mode, normalized, operation, options) {
+  const features = options.frFeatures || {};
+  const access = options.frAccess || "sequence";
+  const rule = FR800_RULES[model];
   const fail = (code, message, extra = {}) => invalid(value, series, model, mode, code, message, { normalized, parsed, ...extra });
 
   if (parsed.kind !== "direct") {
-    return fail("DEVICE_NOT_SUPPORTED", `${parsed.kind} device notation is not listed for the inverter sequence function.`);
+    return fail("DEVICE_NOT_SUPPORTED", `${parsed.kind} device notation is not listed for the inverter.`);
   }
   if (parsed.local || parsed.indirect || parsed.bit !== null || parsed.index !== null) {
-    return fail("MODIFIER_NOT_SUPPORTED", "The inverter sequence function does not document bit selection, indirect specification, index modification, or local devices.");
+    return fail("MODIFIER_NOT_SUPPORTED", "The inverter manuals do not document bit selection, indirect specification, index modification, or local devices.");
   }
-  if (parsed.timerPart) {
-    return fail("DEVICE_NOT_SUPPORTED", `${parsed.notationPrefix} contact/coil/current notation is not documented for the inverter sequence function; use ${parsed.prefix}${parsed.addressText}.`);
+  if (prefixIsLatchRelay(parsed)) {
+    return fail("DEVICE_NOT_SUPPORTED", "The latch relay L has no points on the inverter; the sequence parameters accept a latch range but nothing is latched.");
   }
 
-  const prefix = parsed.prefix;
-  if (prefix === "L") {
-    return fail("DEVICE_NOT_SUPPORTED", "The latch relay L has no points on the inverter sequence function; the sequence parameters accept a latch range but nothing is latched.");
+  if (access === "slmp") return analyzeFrSlmp(value, parsed, series, model, mode, normalized, operation, options, rule, fail);
+
+  if (parsed.timerPart) {
+    return fail("DEVICE_NOT_SUPPORTED", `${parsed.notationPrefix} contact/coil/current notation belongs to the SLMP device table, not to the sequence program; use ${parsed.prefix}${parsed.addressText}, or pass frAccess: "slmp".`);
   }
+  const prefix = parsed.prefix;
   if (parsed.digit !== null && !FR_DIGIT_PREFIXES.has(prefix)) {
     return fail("DIGIT_MODIFIER_NOT_SUPPORTED", "K1-K8 digit designation is documented only for the bit devices X, Y, and M.");
   }
 
-  const range = frRangeFor(prefix, model, mode, features);
+  const range = frSequenceRange(prefix, model, mode, options, features);
   if (!range) {
     return fail("DEVICE_NOT_SUPPORTED", `${prefix} is not listed as an inverter sequence function device for ${model}.`);
   }
+  if (range.missingConfiguration) {
+    return fail("MISSING_CONFIGURATION", "configuredPoints.ST is required in configured mode; the accumulating timer defaults to 0 points.");
+  }
+  if (range.invalidConfiguration) {
+    return fail("INVALID_CONFIGURATION", `configuredPoints.ST exceeds the ${range.ceiling}-point maximum documented for ${model}.`);
+  }
 
-  const warnings = [];
+  return frResult(value, parsed, series, model, mode, normalized, operation, range, {
+    label: "inverter sequence function",
+    allocationHint: 'The accumulating timer ST defaults to 0 points; allocate it in the sequence parameters, then use mode "maximum" or configuredPoints.ST.',
+    checkDigit: true,
+    ioAreas: true
+  });
+}
+
+function prefixIsLatchRelay(parsed) {
+  return parsed.prefix === "L" && !parsed.timerPart;
+}
+
+function analyzeFrSlmp(value, parsed, series, model, mode, normalized, operation, options, rule, fail) {
+  if (!rule.slmp) {
+    return fail("MODEL_NOT_SUPPORTED", `SLMP device access is documented for the Ethernet inverters (FR-A800-E, FR-F800-E, FR-E800-E, FR-E800-SCE, FR-E806), not for ${model}.`);
+  }
+  if (parsed.digit !== null) {
+    return fail("DIGIT_MODIFIER_NOT_SUPPORTED", "SLMP addresses a head device and a point count; K1-K8 digit designation is not part of the device specification.");
+  }
+
+  const key = parsed.timerPart ? `${parsed.prefix}${{ contact: "S", coil: "C", current: "N" }[parsed.timerPart]}` : parsed.prefix;
+  const entry = FR_SLMP_DEVICES[key];
+  if (!entry) {
+    const parts = { T: ["TS", "TC", "TN"], ST: rule.stSpelling === "S" ? ["SS", "SC", "SN"] : ["STS", "STC", "STN"], C: ["CS", "CC", "CN"] }[parsed.prefix];
+    const hint = parts
+      ? ` The SLMP table addresses the contact, coil, and current value separately, so use ${parts.map(part => `${part}${parsed.addressText}`).join(", ")}.`
+      : "";
+    return fail("DEVICE_NOT_SUPPORTED", `${parsed.notationPrefix || parsed.prefix} is not listed in the SLMP device table.${hint}`);
+  }
+  if (entry.requires && !rule[entry.requires]) {
+    return fail("DEVICE_NOT_SUPPORTED", `The link register W is only listed in the FR-E800 SLMP device table, not for ${model}.`);
+  }
+
+  const range = frSlmpRange(entry, model, mode, options);
+  if (range.missingConfiguration) {
+    return fail("MISSING_CONFIGURATION", "configuredPoints.ST is required in configured mode; the accumulating timer defaults to 0 points.");
+  }
+  if (range.invalidConfiguration) {
+    return fail("INVALID_CONFIGURATION", `configuredPoints.ST exceeds the ${range.ceiling}-point maximum documented in the SLMP device table.`);
+  }
+
+  const spellingWarning = [];
+  const canonical = FR_SLMP_SPELLING[key];
+  if (canonical) {
+    const expected = rule.stSpelling === "S" ? canonical : key;
+    if ((parsed.notationPrefix || "") !== expected) {
+      spellingWarning.push(`The ${model} manual spells this accumulating-timer device ${expected}${parsed.addressText}; ${parsed.notationPrefix}${parsed.addressText} is accepted as the equivalent from the other inverter manual.`);
+    }
+  }
+  if (parsed.prefix === "SM" && entry.unit === "bit") {
+    spellingWarning.push("For word-unit SLMP access to SM, the head device number must be one listed in the special relay table, otherwise the read or write is not performed correctly.");
+  }
+
+  return frResult(value, parsed, series, model, mode, normalized, operation, range, {
+    label: "SLMP device table",
+    allocationHint: 'The accumulating timer defaults to 0 points; allocate it in the sequence parameters, then use mode "maximum" or configuredPoints.ST.',
+    checkDigit: false,
+    ioAreas: true,
+    deviceCode: entry.code,
+    deviceUnit: entry.unit,
+    extraWarnings: spellingWarning
+  });
+}
+
+function frResult(value, parsed, series, model, mode, normalized, operation, range, context) {
+  const prefix = parsed.prefix;
+  const fail = (code, message, extra = {}) => invalid(value, series, model, mode, code, message, { normalized, parsed, ...extra });
   const withinRange = address => range.ranges.some(([start, end]) => address >= start && address <= end);
+  const warnings = [...(context.extraWarnings || [])];
   let configurationDependent = range.dependent;
 
   if (mode !== "syntax") {
     if (!withinRange(parsed.address)) {
-      if (range.serialExtendedTo != null && parsed.address <= range.serialExtendedTo) {
-        return fail("REQUIRES_SERIAL_SUPPORT",
-          `${prefix}${parsed.addressText} needs the 32-point T/ST/C extension, which ${model} only provides from the January 2021 production month onward. Check the SERIAL plate, then use mode "maximum" or frFeatures.extendedTimerPoints.`,
+      if (range.allocatableTo != null && parsed.address <= range.allocatableTo) {
+        return fail("REQUIRES_CONFIGURATION", `${parsed.notationPrefix || prefix}${parsed.addressText} needs sequence-parameter allocation. ${context.allocationHint}`,
           { configurationDependent: true, suggestedMode: "maximum" });
       }
-      return fail("ADDRESS_OUT_OF_RANGE", `${parsed.notationPrefix || prefix}${parsed.addressText} is outside the fixed ${model} range.`);
+      if (range.serialExtendedTo != null && parsed.address <= range.serialExtendedTo) {
+        return fail("REQUIRES_SERIAL_SUPPORT",
+          `${prefix}${parsed.addressText} needs the 32-point T/C extension, which ${model} only provides from the January 2021 production month onward. Check the SERIAL plate, then use mode "maximum" or frFeatures.extendedTimerPoints.`,
+          { configurationDependent: true, suggestedMode: "maximum" });
+      }
+      return fail("ADDRESS_OUT_OF_RANGE", `${parsed.notationPrefix || prefix}${parsed.addressText} is outside the ${model} range in the ${context.label}.`);
     }
-    if (parsed.digit !== null) {
+    if (context.checkDigit && parsed.digit !== null) {
       const last = parsed.address + parsed.digit * 4 - 1;
       if (!withinRange(last)) {
         return fail("DIGIT_RANGE_OVERFLOW", `K${parsed.digit}${prefix}${parsed.addressText} covers ${parsed.digit * 4} points and runs past the end of the ${prefix} range.`);
       }
     }
-    if (range.dependent && (prefix === "T" || prefix === "ST" || prefix === "C")) {
-      warnings.push("The 32-point T/ST/C extension depends on the SERIAL production month; pass frFeatures.extendedTimerPoints once it is known.");
+    if (range.dependent && (prefix === "T" || prefix === "C")) {
+      warnings.push("The 32-point T/C extension depends on the SERIAL production month; pass frFeatures.extendedTimerPoints once it is known.");
+    }
+    if (range.allocated) {
+      warnings.push("The accumulating timer is only usable once the sequence parameters allocate its points; pass configuredPoints.ST for an exact result.");
     }
     if (range.dependent && prefix === "P") {
       warnings.push("The 256-point P pointer device depends on the SERIAL production month; pass frFeatures.pointerDevice once it is known.");
     }
-    if (prefix === "X" || prefix === "Y") {
+    if (context.ioAreas && (prefix === "X" || prefix === "Y")) {
       const area = frIoArea(parsed.address);
       if (area && area[3]) {
         configurationDependent = true;
@@ -763,32 +927,38 @@ function analyzeFr(value, parsed, series, model, mode, normalized, operation, fe
 
   const readOnly = mode !== "syntax" && prefix === "X";
   if (readOnly) {
-    warnings.push("Input device X is refreshed from the terminal or network every scan, so turning it on from the program does not drive the corresponding signal. Use SM1200/SM1255 and SD1148/SD1149 for inverter operation control instead.");
+    warnings.push("Input device X is refreshed from the terminal or network every scan, so turning it on does not drive the corresponding signal. Use SM1200/SM1255 and SD1148/SD1149 for inverter operation control instead.");
   }
   const operationAllowed = operation === "write" ? !readOnly : operation === "read" ? true : null;
 
+  const common = {
+    valid: true, input: value, normalized, series, model, mode, operation, code: "VALID",
+    parsed, source: SOURCES[series]
+  };
+  if (context.deviceCode) {
+    common.deviceCode = context.deviceCode;
+    common.deviceUnit = context.deviceUnit;
+  }
+
   if (mode === "syntax") {
     return {
-      valid: true, input: value, normalized, series, model, mode, operation, code: "VALID",
-      message: "Valid inverter sequence function device syntax; range and access were not evaluated in syntax mode.",
-      configurationDependent: false, access: "not-evaluated", operationAllowed: null,
-      warnings: [], parsed, source: SOURCES[series]
+      ...common,
+      message: `Valid ${context.label} device syntax; range and access were not evaluated in syntax mode.`,
+      configurationDependent: false, access: "not-evaluated", operationAllowed: null, warnings: []
     };
   }
 
   return {
-    valid: true, input: value, normalized, series, model, mode, operation, code: "VALID",
+    ...common,
     message: operation === "write" && readOnly
-      ? "Valid device notation and fixed range, but X is an input image that the program cannot drive."
+      ? "Valid device notation and range, but X is an input image that cannot be driven."
       : configurationDependent
-        ? "Valid within the fixed inverter sequence function range; confirm the inverter SERIAL and network configuration."
-        : "Valid within the fixed inverter sequence function range.",
+        ? `Valid within the ${context.label} range; confirm the inverter SERIAL, sequence parameters, and network configuration.`
+        : `Valid within the ${context.label} range.`,
     configurationDependent,
     access: readOnly ? "read-only" : "read-write",
     operationAllowed,
-    warnings,
-    parsed,
-    source: SOURCES[series]
+    warnings
   };
 }
 
@@ -818,13 +988,16 @@ function analyzeDevice(value, options = {}) {
   if (series === "FR800") {
     const featureError = validateFrFeatures(options.frFeatures, model);
     if (featureError) return invalid(value, series, model, mode, "INVALID_FR_FEATURES", featureError);
+    if (options.frAccess !== undefined && !["sequence", "slmp"].includes(options.frAccess)) {
+      return invalid(value, series, model, mode, "INVALID_FR_ACCESS", "frAccess must be sequence or slmp.");
+    }
   }
   const parsed = parseDevice(value, { series, inputMode });
   const normalized = inputMode === "friendly" ? normalizeDevice(value) : (typeof value === "string" ? value : null);
   if (!parsed) return invalid(value, series, model, mode, "INVALID_SYNTAX", "The value is not a supported MELSEC/MELFA device notation.", { normalized });
 
   if (series === "CR800") return analyzeCr800(value, parsed, series, model, mode, normalized, operation, options.cr800Features);
-  if (series === "FR800") return analyzeFr(value, parsed, series, model, mode, normalized, operation, options.frFeatures);
+  if (series === "FR800") return analyzeFr(value, parsed, series, model, mode, normalized, operation, options);
 
   if (series === "iQ-F" && ["V", "LT", "LST", "ZR", "RD", "FX", "FY", "FD"].includes(parsed.prefix)) {
     return invalid(value, series, model, mode, "DEVICE_NOT_SUPPORTED", `${parsed.prefix} is not listed as an iQ-F device in the attached manual.`, { normalized, parsed });

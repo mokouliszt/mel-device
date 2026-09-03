@@ -4,7 +4,7 @@
 
 三菱電機 MELSEC / MXコントローラ、MELFAロボットコントローラ、およびFRインバータのシーケンス機能のデバイス表記を、シリーズとCPU／コントローラ／インバータ型名を含めて検証する、依存ライブラリなしのnpmパッケージです。
 
-対応シリーズは iQ-R、iQ-F、MX-R、MX-F、CR800-R/D/Q、および FR-A800／A800 Plus／F800／E800 シーケンス機能です。ES Modules と CommonJS の両方から利用できます。
+対応シリーズは iQ-R、iQ-F、MX-R、MX-F、CR800-R/D/Q、および FR-A800／A800 Plus／F800／E800 インバータ（シーケンス機能とSLMPデバイステーブルの両方）です。ES Modules と CommonJS の両方から利用できます。
 
 ## インストール
 
@@ -46,7 +46,7 @@ isValidDevice("U3E0\\G524287", {
 
 `analyzeDevice` は、単なる `true` / `false` ではなく、正規化後の型名、解釈したデバイス、失敗理由、参照マニュアルとページ、実機設定への依存有無を返します。入力欄のバリデーションにはこちらを推奨します。
 
-`model`を省略できるのは、`series`に`CR800-R`、`CR800-D`、`CR800-Q`、`FR-A800`、`FR-F800`、`FR-E800`のような単一機種のショートハンドを直接指定した場合です。`iQ-R`、`iQ-F`、`MX-R`、`MX-F`、`CR800`、`FR800`では従来どおり型名を指定してください。
+`model`を省略できるのは、`series`に`CR800-R`、`CR800-D`、`CR800-Q`、`FR-A800`、`FR-A800-E`、`FR-F800`、`FR-E800`のような単一機種のショートハンドを直接指定した場合です。`iQ-R`、`iQ-F`、`MX-R`、`MX-F`、`CR800`、`FR800`では従来どおり型名を指定してください。
 
 ## 判定モード
 
@@ -59,7 +59,7 @@ PLCのM/D等はCPUパラメータで点数を変更できるため、型名だ�
 | `configured` | 実機プロジェクトの厳密判定 | `configuredPoints` に渡した実際の点数で判定。可変デバイスの点数が未指定なら `MISSING_CONFIGURATION`。 |
 | `syntax` | エディタ入力途中・構文チェック | 型名が対応するデバイス文法のみを確認し、点数範囲を無視。 |
 
-CR800-R/D/QおよびFRインバータのデバイス範囲はマニュアル上固定されているため、これらのシリーズでは`configuredPoints`を参照しません。ただしインバータでは、`maximum`が後述のSERIAL依存のT/ST/C 32点拡張を許可する点だけが異なります。
+CR800-R/D/QおよびFRインバータのデバイス範囲はマニュアル上固定されているため、これらのシリーズでは`configuredPoints`を参照しません。ただしインバータでは、`maximum`が後述のSERIAL依存のT/C 32点拡張と未割付のST点数を許可します。インバータが受け付ける点数指定は`configuredPoints.ST`のみです。
 
 ```js
 isValidDevice("D99", {
@@ -201,7 +201,8 @@ analyzeDevice("P100", { series: "FR-A800" }).code; // "DEVICE_NOT_SUPPORTED"
 | X、Y | `X0～X8F`、`Y0～Y8F`（各144点） | 同左 | 16進 |
 | M | `M0～M127` | 同左 | 10進 |
 | L | 点数なし（シーケンスパラメータで設定可能だがラッチしない） | 同左 | - |
-| T、ST、C | `0～15`、または下記拡張で`0～31` | `0～15` | 10進 |
+| T、C | `0～15`、または下記拡張で`0～31` | `0～15` | 10進 |
+| ST | 初期値0点。割付けにより`0～15`、下記拡張で`0～31`まで | 初期値0点。割付けにより`0～15`まで | 10進 |
 | D | `D0～D255` | 同左 | 10進 |
 | P | 記載なし | `P0～P127`、`P2048～P2175` | 10進 |
 | SM、SD | `0～2047`（機能制限あり） | 同左 | 10進 |
@@ -222,10 +223,59 @@ isValidDevice("T16", { series: "FR-A800", frFeatures: { extendedTimerPoints: fal
 
 | `frFeatures` | 対象 | 意味 |
 | --- | --- | --- |
-| `extendedTimerPoints` | FR-A800、FR-A800-CRN、FR-A800-LC、FR-F800 | T/ST/Cの32点対応 |
+| `extendedTimerPoints` | FR-A800、FR-A800-E、FR-A800-CRN、FR-A800-LC、FR-F800、FR-F800-E | T/ST/Cの32点対応 |
 | `pointerDevice` | FR-E800系 | Pデバイス256点対応 |
 
 マニュアルが対応と記載していない型名に対して`true`を指定した場合は、範囲を黙って広げず`INVALID_FR_FEATURES`を返します。
+
+### 積算タイマは初期値0点
+
+デバイス一覧では積算タイマSTの初期値が0点であり、シーケンスパラメータで割り付けて初めて使用できます。そのためPLCシリーズの点数変更可能デバイスと同じ扱いにしています。
+
+```js
+analyzeDevice("ST0", { series: "FR-A800" });
+// valid: false, code: "REQUIRES_CONFIGURATION", suggestedMode: "maximum"
+
+isValidDevice("ST15", { series: "FR-A800", mode: "maximum" });                                  // true（設定依存）
+isValidDevice("ST15", { series: "FR-A800", mode: "configured", configuredPoints: { ST: 16 } }); // true
+isValidDevice("ST16", { series: "FR-A800", mode: "configured", configuredPoints: { ST: 16 } }); // false
+```
+
+`configuredPoints.ST`の上限は16点、上記の32点拡張対応機種では32点です。
+
+### SLMPデバイステーブル
+
+Ethernet仕様のインバータは、外部のSLMPクライアントに対してシーケンス機能とは別のデバイステーブルを公開しています。`frAccess: "slmp"`を指定するとそちらで判定し、結果にSLMPのデバイスコードとアクセス単位が付きます。
+
+```js
+analyzeDevice("X7F", { series: "FR-A800-E", frAccess: "slmp" });
+// valid: true, deviceCode: "H9C", deviceUnit: "bit"
+
+isValidDevice("X80", { series: "FR-A800-E", frAccess: "slmp" }); // false（SLMPはH7Fまで）
+isValidDevice("X80", { series: "FR-A800-E" });                   // true （シーケンス機能はH8Fまで）
+```
+
+| デバイス | コード | 単位 | 範囲 |
+| --- | --- | --- | --- |
+| SM | `H91` | ビット | `0～2047` |
+| SD | `HA9` | ワード | `0～2047` |
+| X | `H9C` | ビット | `H0～H7F` |
+| Y | `H9D` | ビット | `H0～H7F` |
+| M | `H90` | ビット | `0～127` |
+| D | `HA8` | ワード | `0～255` |
+| W | `HB4` | ワード | `0～8191`（FR-E800のEthernet仕様品のみ） |
+| `TS` / `TC` / `TN` | `HC1` / `HC0` / `HC2` | ビット / ビット / ワード | `0～15` |
+| `STS` / `STC` / `STN`（`SS` / `SC` / `SN`） | `HC7` / `HC6` / `HC8` | ビット / ビット / ワード | 初期値0点、割付けにより`0～15`まで |
+| `CS` / `CC` / `CN` | `HC4` / `HC3` / `HC5` | ビット / ビット / ワード | `0～15` |
+
+補足:
+
+- SLMPアクセスの記載はEthernet仕様品のみです。それ以外の型名では`MODEL_NOT_SUPPORTED`を返します。
+- SLMPは接点・コイル・現在値を別デバイスとして指定するため、素の`T0`は無効とし、`TS0`／`TC0`／`TN0`を案内します。
+- 積算タイマの各部は、FR-A800-E/F800-Eのマニュアルでは`STS`/`STC`/`STN`、FR-E800のマニュアルでは`SS`/`SC`/`SN`と表記されます。両方を受け付け、選択した型名のマニュアル表記を警告で示します。
+- 両マニュアルのSLMP表はT/CとSTを16点で頭打ちにしているため、`extendedTimerPoints`では広がりません。
+- リンクレジスタ`W`はパラメータとモニタデータに対応し、PLCシリーズと異なり10進です。`parseDevice("W999", { series: "FR-E800-E" })`のアドレスは999になります。
+- P、N、L、桁指定はSLMPデバイステーブルに含まれません。
 
 ### 桁指定と入力デバイス
 
@@ -286,7 +336,7 @@ X/Yの`30H`以降はCC-Linkリモート入出力（`30H～3FH`）とEthernetイ�
 - MX-R: MXR300-16/-32/-64、MXR500-128/-256
 - MX-F: MXF100系のマニュアル対象10機種（`MXF100` をファミリ別名として受付）
 - MELFA CR800: CR800-R、CR800-D、CR800-Q
-- FRインバータ（`FR800`）: FR-A800、FR-A800-P、FR-A800-CRN、FR-A800-LC、FR-A800-Plus、FR-F800、FR-E800、FR-E800-E、FR-E800-SCE、FR-E800-NC、FR-E806
+- FRインバータ（`FR800`）: FR-A800、FR-A800-E、FR-A800-P、FR-A800-CRN、FR-A800-LC、FR-A800-Plus、FR-F800、FR-F800-E、FR-E800、FR-E800-E、FR-E800-SCE、FR-E800-NC、FR-E806
 
 ## 資料
 

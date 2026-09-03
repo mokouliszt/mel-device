@@ -323,9 +323,9 @@ test("applies the fixed inverter device ranges", () => {
   assert.equal(parseDevice("X8F", { series: "FR-A800" }).address, 0x8f);
 });
 
-test("separates the SERIAL-dependent 32-point T/ST/C extension", () => {
+test("separates the SERIAL-dependent 32-point T/C extension", () => {
   assert.equal(isValidDevice("T15", { series: "FR-A800" }), true);
-  const pending = analyzeDevice("ST16", { series: "FR-A800" });
+  const pending = analyzeDevice("T16", { series: "FR-A800" });
   assert.equal(pending.valid, false);
   assert.equal(pending.code, "REQUIRES_SERIAL_SUPPORT");
   assert.equal(pending.suggestedMode, "maximum");
@@ -336,6 +336,7 @@ test("separates the SERIAL-dependent 32-point T/ST/C extension", () => {
   assert.equal(analyzeDevice("T31", { series: "FR-A800", mode: "maximum" }).configurationDependent, true);
 
   assert.equal(analyzeDevice("T16", { series: "FR-A800-Plus", mode: "maximum" }).code, "ADDRESS_OUT_OF_RANGE");
+  assert.equal(analyzeDevice("T16", { series: "FR-A800-E", mode: "maximum" }).valid, true);
   assert.equal(analyzeDevice("T16", { series: "FR-E800", mode: "maximum" }).code, "ADDRESS_OUT_OF_RANGE");
   assert.equal(analyzeDevice("T0", {
     series: "FR-E800", frFeatures: { extendedTimerPoints: true }
@@ -382,4 +383,54 @@ test("reports inverter X as an input image and flags network I/O areas", () => {
   assert.match(link.warnings.join(" "), /Ethernet/);
   assert.equal(analyzeDevice("Y30", { series: "FR-A800" }).configurationDependent, true);
   assert.equal(analyzeDevice("D0", { series: "FR-A800", frFeatures: { unknown: true } }).code, "INVALID_FR_FEATURES");
+});
+
+test("treats the accumulating timer ST as unallocated by default", () => {
+  const pending = analyzeDevice("ST0", { series: "FR-A800" });
+  assert.equal(pending.valid, false);
+  assert.equal(pending.code, "REQUIRES_CONFIGURATION");
+  assert.equal(pending.suggestedMode, "maximum");
+  assert.equal(analyzeDevice("ST0", { series: "FR-A800", mode: "maximum" }).configurationDependent, true);
+  assert.equal(isValidDevice("ST31", { series: "FR-A800", mode: "maximum" }), true);
+  assert.equal(isValidDevice("ST16", { series: "FR-E800", mode: "maximum" }), false);
+  assert.equal(isValidDevice("ST15", { series: "FR-A800", mode: "configured", configuredPoints: { ST: 16 } }), true);
+  assert.equal(isValidDevice("ST16", { series: "FR-A800", mode: "configured", configuredPoints: { ST: 16 } }), false);
+  assert.equal(analyzeDevice("ST0", { series: "FR-A800", mode: "configured" }).code, "MISSING_CONFIGURATION");
+  assert.equal(analyzeDevice("ST0", {
+    series: "FR-A800", mode: "configured", configuredPoints: { ST: 33 }
+  }).code, "INVALID_CONFIGURATION");
+});
+
+test("validates SLMP device specifications for the Ethernet inverters", () => {
+  const slmp = { series: "FR-A800-E", frAccess: "slmp" };
+  assert.equal(analyzeDevice("X7F", slmp).deviceCode, "H9C");
+  assert.equal(analyzeDevice("X7F", slmp).deviceUnit, "bit");
+  assert.equal(isValidDevice("X80", slmp), false);
+  assert.equal(isValidDevice("X80", { series: "FR-A800-E" }), true);
+  assert.equal(analyzeDevice("TN15", slmp).deviceCode, "HC2");
+  assert.equal(analyzeDevice("CC0", slmp).deviceCode, "HC3");
+  assert.equal(isValidDevice("TS16", slmp), false);
+  assert.equal(isValidDevice("TS16", { ...slmp, frFeatures: { extendedTimerPoints: true } }), false);
+  assert.equal(analyzeDevice("T0", slmp).code, "DEVICE_NOT_SUPPORTED");
+  assert.match(analyzeDevice("T0", slmp).message, /TS0/);
+  assert.equal(analyzeDevice("K4X0", slmp).code, "DIGIT_MODIFIER_NOT_SUPPORTED");
+  assert.equal(analyzeDevice("D0", { series: "FR-E800", frAccess: "slmp" }).code, "MODEL_NOT_SUPPORTED");
+  assert.equal(analyzeDevice("D0", { series: "FR-A800", frAccess: "slmp" }).code, "MODEL_NOT_SUPPORTED");
+  assert.equal(analyzeDevice("D0", { series: "FR-A800", frAccess: "both" }).code, "INVALID_FR_ACCESS");
+});
+
+test("accepts both accumulating-timer spellings and the FR-E800 link register", () => {
+  const e800 = { series: "FR-E800-E", frAccess: "slmp", mode: "maximum" };
+  assert.equal(analyzeDevice("SS0", e800).deviceCode, "HC7");
+  assert.equal(analyzeDevice("SN0", e800).deviceCode, "HC8");
+  assert.equal(analyzeDevice("SS0", e800).warnings.some(w => /spells/.test(w)), false);
+  assert.equal(analyzeDevice("STS0", e800).warnings.some(w => /spells/.test(w)), true);
+  assert.equal(analyzeDevice("STS0", { series: "FR-A800-E", frAccess: "slmp", mode: "maximum" }).warnings.some(w => /spells/.test(w)), false);
+
+  assert.equal(analyzeDevice("W8191", { series: "FR-E800-E", frAccess: "slmp" }).deviceCode, "HB4");
+  assert.equal(isValidDevice("W8192", { series: "FR-E800-E", frAccess: "slmp" }), false);
+  assert.equal(analyzeDevice("W0", { series: "FR-A800-E", frAccess: "slmp" }).code, "DEVICE_NOT_SUPPORTED");
+  assert.equal(analyzeDevice("W0", { series: "FR-E800-E" }).code, "DEVICE_NOT_SUPPORTED");
+  assert.equal(parseDevice("W999", { series: "FR-E800-E" }).address, 999);
+  assert.equal(parseDevice("W999", { series: "iQ-R" }).address, 0x999);
 });

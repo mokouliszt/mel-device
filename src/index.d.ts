@@ -2,13 +2,15 @@ export type MelSeries =
   | "iQ-R" | "iQ-F" | "MX-R" | "MX-F"
   | "CR800" | "CR800-R" | "CR800-D" | "CR800-Q"
   | "FR800"
-  | "FR-A800" | "FR-A800-P" | "FR-A800-CRN" | "FR-A800-LC" | "FR-A800-Plus"
-  | "FR-F800"
+  | "FR-A800" | "FR-A800-E" | "FR-A800-P" | "FR-A800-CRN" | "FR-A800-LC" | "FR-A800-Plus"
+  | "FR-F800" | "FR-F800-E"
   | "FR-E800" | "FR-E800-E" | "FR-E800-SCE" | "FR-E800-NC" | "FR-E806";
 export type ValidationMode = "syntax" | "default" | "maximum" | "configured";
 export type InputMode = "exact" | "friendly";
 export type DeviceOperation = "read" | "write" | "either";
 export type DeviceAccess = "read-write" | "read-only" | "configuration-dependent" | "not-evaluated";
+/** "sequence" validates the sequence-program device table, "slmp" the SLMP device table of the Ethernet inverters. */
+export type FrAccess = "sequence" | "slmp";
 
 export interface Cr800Features {
   /** CR800-R/Q sequencer I/O unit direct control (parameter QXYREAD). */
@@ -33,9 +35,11 @@ export interface Cr800Features {
 
 export interface FrFeatures {
   /**
-   * 32-point T/ST/C extension. Listed only for FR-A800 (excluding FR-A800-P),
-   * FR-A800 Plus (FR-A800-CRN/LC) and FR-F800, from the January 2021
-   * production month onward. Omit when the SERIAL plate has not been checked.
+   * 32-point T/ST/C extension. Listed only for FR-A800/FR-A800-E (excluding
+   * FR-A800-P), FR-A800 Plus (FR-A800-CRN/LC) and FR-F800/FR-F800-E, from the
+   * January 2021 production month onward. Omit when the SERIAL plate has not
+   * been checked. Ignored for `frAccess: "slmp"`, whose table caps T/C/ST at
+   * 16 points.
    */
   extendedTimerPoints?: boolean;
   /**
@@ -56,6 +60,8 @@ export interface DeviceOptions {
   cr800Features?: Cr800Features;
   /** Known inverter feature states. Omitted properties are treated as unknown. */
   frFeatures?: FrFeatures;
+  /** Which inverter device table to validate against. Defaults to "sequence". */
+  frAccess?: FrAccess;
 }
 
 export interface ParsedDevice {
@@ -95,6 +101,10 @@ export interface DeviceAnalysis {
   operationAllowed?: boolean | null;
   activeAllocations?: string[];
   possibleAllocations?: string[];
+  /** SLMP device code, such as "H9C". Present for `frAccess: "slmp"` results. */
+  deviceCode?: string;
+  /** SLMP access unit for the device code. */
+  deviceUnit?: "bit" | "word";
   warnings?: string[];
   parsed?: ParsedDevice;
   suggestedMode?: ValidationMode;
