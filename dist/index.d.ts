@@ -1,4 +1,10 @@
-export type MelSeries = "iQ-R" | "iQ-F" | "MX-R" | "MX-F" | "CR800" | "CR800-R" | "CR800-D" | "CR800-Q";
+export type MelSeries =
+  | "iQ-R" | "iQ-F" | "MX-R" | "MX-F"
+  | "CR800" | "CR800-R" | "CR800-D" | "CR800-Q"
+  | "FR800"
+  | "FR-A800" | "FR-A800-P" | "FR-A800-CRN" | "FR-A800-LC" | "FR-A800-Plus"
+  | "FR-F800"
+  | "FR-E800" | "FR-E800-E" | "FR-E800-SCE" | "FR-E800-NC" | "FR-E806";
 export type ValidationMode = "syntax" | "default" | "maximum" | "configured";
 export type InputMode = "exact" | "friendly";
 export type DeviceOperation = "read" | "write" | "either";
@@ -25,6 +31,20 @@ export interface Cr800Features {
   ccLinkIef?: boolean;
 }
 
+export interface FrFeatures {
+  /**
+   * 32-point T/ST/C extension. Listed only for FR-A800 (excluding FR-A800-P),
+   * FR-A800 Plus (FR-A800-CRN/LC) and FR-F800, from the January 2021
+   * production month onward. Omit when the SERIAL plate has not been checked.
+   */
+  extendedTimerPoints?: boolean;
+  /**
+   * 256-point P pointer device. Listed only for FR-E800, from the January 2021
+   * production month onward.
+   */
+  pointerDevice?: boolean;
+}
+
 export interface DeviceOptions {
   series: MelSeries | string;
   model?: string;
@@ -34,6 +54,8 @@ export interface DeviceOptions {
   configuredPoints?: Partial<Record<string, number>>;
   /** Known CR800 feature states. Omitted properties are treated as unknown. */
   cr800Features?: Cr800Features;
+  /** Known inverter feature states. Omitted properties are treated as unknown. */
+  frFeatures?: FrFeatures;
 }
 
 export interface ParsedDevice {

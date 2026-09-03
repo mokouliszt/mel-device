@@ -1,6 +1,6 @@
 "use strict";
 
-const SERIES = ["iQ-R", "iQ-F", "MX-R", "MX-F", "CR800"];
+const SERIES = ["iQ-R", "iQ-F", "MX-R", "MX-F", "CR800", "FR800"];
 
 const IQ_R_MODELS = [
   "R00CPU", "R01CPU", "R02CPU", "R04CPU", "R04ENCPU", "R08CPU", "R08ENCPU",
@@ -13,13 +13,19 @@ const MX_F_MODELS = [
   "MXF100-Y32N", "MXF100-Y32P", "MXF100-H32N", "MXF100-H32P", "MXF100-Y16R"
 ];
 const CR800_MODELS = ["CR800-R", "CR800-D", "CR800-Q"];
+const FR800_MODELS = [
+  "FR-A800", "FR-A800-P", "FR-A800-CRN", "FR-A800-LC", "FR-A800-Plus",
+  "FR-F800",
+  "FR-E800", "FR-E800-E", "FR-E800-SCE", "FR-E800-NC", "FR-E806"
+];
 
 const MODEL_LISTS = {
   "iQ-R": IQ_R_MODELS,
   "iQ-F": IQ_F_MODELS,
   "MX-R": MX_R_MODELS,
   "MX-F": MX_F_MODELS,
-  CR800: CR800_MODELS
+  CR800: CR800_MODELS,
+  FR800: FR800_MODELS
 };
 
 const BIT_PREFIXES = new Set(["X", "DX", "Y", "DY", "M", "L", "B", "F", "SB", "V", "S", "SM", "FX", "FY"]);
@@ -109,7 +115,8 @@ const SOURCES = {
   "iQ-R": { manual: "SH-082487-J", pages: [65, 408, 409, 410, 435, 436] },
   "MX-R": { manual: "SH-082640-D", pages: [350, 351, 352, 380, 381] },
   "MX-F": { manual: "SH-082633-E", pages: [277, 416, 417, 418] },
-  CR800: { manual: "BFP-A3477-AB", pages: [489, 490, 491, 618, 619, 654, 655, 656, 657] }
+  CR800: { manual: "BFP-A3477-AB", pages: [489, 490, 491, 618, 619, 654, 655, 656, 657] },
+  FR800: { manual: "IB-0600491-Q", pages: [8, 11, 22, 23, 24, 25, 26, 27, 28, 107, 125, 126, 157] }
 };
 
 // CPU buffer memory access devices (U3En\G, U3En\HG).
@@ -166,6 +173,60 @@ const CR800_ALLOCATION_LABELS = {
   ccLinkIef: "CC-Link IE Field"
 };
 
+// Inverter sequence function (FR-A800/A800 Plus/F800/E800).
+// IB-0600491-Q p.107 (3.9.1 device list) fixes every point count; p.8 lists the
+// features whose availability depends on the SERIAL production date; p.22-28
+// give the X/Y device map, p.125-126 the K1-K8 digit designation rules for
+// X/Y/M, and p.157 the N0-N14 master-control nesting range.
+const FR_COMMON_LIMITS = { X: 0x8f, Y: 0x8f, M: 127, D: 255, SM: 2047, SD: 2047, N: 14 };
+const FR_POINTER_RANGES = [[0, 127], [2048, 2175]];
+const FR_DIGIT_PREFIXES = new Set(["X", "Y", "M"]);
+const FR_FEATURE_NAMES = new Set(["extendedTimerPoints", "pointerDevice"]);
+
+// timerPoints: [base, extended]. The 32-point T/ST/C extension is only listed
+// for FR-A800 (excluding FR-A800-P), FR-A800 Plus (FR-A800-CRN/LC) and FR-F800,
+// and only from the January 2021 production month onward (p.8).
+const FR800_RULES = {
+  "FR-A800": { timerPoints: [16, 32], pointer: false },
+  "FR-A800-P": { timerPoints: [16, 16], pointer: false },
+  "FR-A800-CRN": { timerPoints: [16, 32], pointer: false },
+  "FR-A800-LC": { timerPoints: [16, 32], pointer: false },
+  "FR-A800-Plus": { timerPoints: [16, 16], pointer: false },
+  "FR-F800": { timerPoints: [16, 32], pointer: false },
+  "FR-E800": { timerPoints: [16, 16], pointer: true },
+  "FR-E800-E": { timerPoints: [16, 16], pointer: true },
+  "FR-E800-SCE": { timerPoints: [16, 16], pointer: true },
+  "FR-E800-NC": { timerPoints: [16, 16], pointer: true },
+  "FR-E806": { timerPoints: [16, 16], pointer: true }
+};
+
+const FR_SERIES_ALIASES = {
+  FR800: null, FR8: null,
+  FRA800: "FR-A800", FRA800P: "FR-A800-P", FRA800CRN: "FR-A800-CRN",
+  FRA800LC: "FR-A800-LC", FRA800PLUS: "FR-A800-Plus",
+  FRF800: "FR-F800",
+  FRE800: "FR-E800", FRE800E: "FR-E800-E", FRE800SCE: "FR-E800-SCE",
+  FRE800NC: "FR-E800-NC", FRE806: "FR-E806"
+};
+
+const FR_MODEL_ALIASES = {
+  A800: "FR-A800", A800P: "FR-A800-P", A800CRN: "FR-A800-CRN",
+  A800LC: "FR-A800-LC", A800PLUS: "FR-A800-Plus", CRN: "FR-A800-CRN",
+  LC: "FR-A800-LC", PLUS: "FR-A800-Plus",
+  F800: "FR-F800",
+  E800: "FR-E800", E800E: "FR-E800-E", E800SCE: "FR-E800-SCE",
+  E800NC: "FR-E800-NC", E806: "FR-E806"
+};
+
+// X/Y map areas (p.22-28). Everything from X30/Y30 upward only exists while the
+// matching network is configured, so those addresses stay configuration-dependent.
+const FR_IO_AREAS = [
+  [0x00, 0x1f, "external and built-in option I/O", false],
+  [0x20, 0x2f, "inverter system I/O", false],
+  [0x30, 0x3f, "CC-Link remote I/O", true],
+  [0x40, 0x8f, "Ethernet inverter-to-inverter link I/O", true]
+];
+
 class MelDeviceError extends Error {
   constructor(message, result) {
     super(message);
@@ -175,22 +236,35 @@ class MelDeviceError extends Error {
   }
 }
 
+function compactName(value) {
+  return value.normalize("NFKC").trim().toUpperCase().replace(/[\s_-]/g, "");
+}
+
 function canonicalSeries(value) {
   if (typeof value !== "string") return null;
-  const compact = value.normalize("NFKC").trim().toUpperCase().replace(/[\s_-]/g, "");
+  const compact = compactName(value);
+  if (Object.prototype.hasOwnProperty.call(FR_SERIES_ALIASES, compact)) return "FR800";
   return ({ IQR: "iQ-R", IQF: "iQ-F", MXR: "MX-R", MXF: "MX-F", CR800: "CR800", CR800R: "CR800", CR800D: "CR800", CR800Q: "CR800" })[compact] || null;
 }
 
 function cr800ModelFromSeries(value) {
   if (typeof value !== "string") return null;
-  const compact = value.normalize("NFKC").trim().toUpperCase().replace(/[\s_-]/g, "");
-  return ({ CR800R: "CR800-R", CR800D: "CR800-D", CR800Q: "CR800-Q" })[compact] || null;
+  return ({ CR800R: "CR800-R", CR800D: "CR800-D", CR800Q: "CR800-Q" })[compactName(value)] || null;
+}
+
+function fr800ModelFromSeries(value) {
+  if (typeof value !== "string") return null;
+  return FR_SERIES_ALIASES[compactName(value)] || null;
+}
+
+function modelFromSeries(value) {
+  return cr800ModelFromSeries(value) || fr800ModelFromSeries(value);
 }
 
 function normalizeModel(series, value) {
   const s = canonicalSeries(series);
   if (!s) return null;
-  if (s === "CR800" && value == null) return cr800ModelFromSeries(series);
+  if ((s === "CR800" || s === "FR800") && value == null) return modelFromSeries(series);
   if (typeof value !== "string") return null;
   const model = value.normalize("NFKC").trim().toUpperCase().replace(/\s+/g, "");
   if (s === "iQ-R") {
@@ -210,8 +284,12 @@ function normalizeModel(series, value) {
     return MX_R_MODELS.includes(model) ? model : null;
   }
   if (s === "CR800") {
-    const compact = String(value).normalize("NFKC").trim().toUpperCase().replace(/[\s_-]/g, "");
+    const compact = compactName(String(value));
     return ({ R: "CR800-R", D: "CR800-D", Q: "CR800-Q", CR800R: "CR800-R", CR800D: "CR800-D", CR800Q: "CR800-Q" })[compact] || null;
+  }
+  if (s === "FR800") {
+    const compact = compactName(String(value));
+    return FR_SERIES_ALIASES[compact] || FR_MODEL_ALIASES[compact] || null;
   }
   if (model === "MXF100") return model;
   return MX_F_MODELS.includes(model) ? model : null;
@@ -219,7 +297,7 @@ function normalizeModel(series, value) {
 
 function getSupportedModels(series) {
   const s = canonicalSeries(series);
-  const inferred = cr800ModelFromSeries(series);
+  const inferred = modelFromSeries(series);
   if (inferred) return [inferred];
   return s ? [...MODEL_LISTS[s]] : [];
 }
@@ -582,6 +660,138 @@ function analyzeCr800(value, parsed, series, model, mode, normalized, operation,
   };
 }
 
+function validateFrFeatures(features, model) {
+  if (features === undefined) return null;
+  if (!features || typeof features !== "object" || Array.isArray(features)) {
+    return "frFeatures must be an object when supplied.";
+  }
+  for (const [name, state] of Object.entries(features)) {
+    if (!FR_FEATURE_NAMES.has(name)) return `Unknown FR feature: ${name}.`;
+    if (typeof state !== "boolean") return `frFeatures.${name} must be boolean.`;
+  }
+  const rule = FR800_RULES[model];
+  if (features.extendedTimerPoints === true && rule.timerPoints[0] === rule.timerPoints[1]) {
+    return `${model} is not listed as supporting the 32-point T/ST/C extension.`;
+  }
+  if (features.pointerDevice === true && !rule.pointer) {
+    return `${model} is not listed as supporting the P pointer device.`;
+  }
+  return null;
+}
+
+function frRangeFor(prefix, model, mode, features) {
+  const rule = FR800_RULES[model];
+  if (prefix === "T" || prefix === "ST" || prefix === "C") {
+    const [base, extended] = rule.timerPoints;
+    const declared = typeof features.extendedTimerPoints === "boolean" ? features.extendedTimerPoints : null;
+    if (declared !== null) return { ranges: [[0, (declared ? extended : base) - 1]], dependent: false };
+    if (mode === "maximum") return { ranges: [[0, extended - 1]], dependent: extended !== base };
+    return { ranges: [[0, base - 1]], dependent: false, serialExtendedTo: extended !== base ? extended - 1 : null };
+  }
+  if (prefix === "P") {
+    if (!rule.pointer) return null;
+    return { ranges: FR_POINTER_RANGES, dependent: features.pointerDevice !== true };
+  }
+  const limit = FR_COMMON_LIMITS[prefix];
+  if (limit === undefined) return null;
+  return { ranges: [[0, limit]], dependent: false };
+}
+
+function frIoArea(address) {
+  return FR_IO_AREAS.find(([start, end]) => address >= start && address <= end) || null;
+}
+
+function analyzeFr(value, parsed, series, model, mode, normalized, operation, features = {}) {
+  const fail = (code, message, extra = {}) => invalid(value, series, model, mode, code, message, { normalized, parsed, ...extra });
+
+  if (parsed.kind !== "direct") {
+    return fail("DEVICE_NOT_SUPPORTED", `${parsed.kind} device notation is not listed for the inverter sequence function.`);
+  }
+  if (parsed.local || parsed.indirect || parsed.bit !== null || parsed.index !== null) {
+    return fail("MODIFIER_NOT_SUPPORTED", "The inverter sequence function does not document bit selection, indirect specification, index modification, or local devices.");
+  }
+  if (parsed.timerPart) {
+    return fail("DEVICE_NOT_SUPPORTED", `${parsed.notationPrefix} contact/coil/current notation is not documented for the inverter sequence function; use ${parsed.prefix}${parsed.addressText}.`);
+  }
+
+  const prefix = parsed.prefix;
+  if (prefix === "L") {
+    return fail("DEVICE_NOT_SUPPORTED", "The latch relay L has no points on the inverter sequence function; the sequence parameters accept a latch range but nothing is latched.");
+  }
+  if (parsed.digit !== null && !FR_DIGIT_PREFIXES.has(prefix)) {
+    return fail("DIGIT_MODIFIER_NOT_SUPPORTED", "K1-K8 digit designation is documented only for the bit devices X, Y, and M.");
+  }
+
+  const range = frRangeFor(prefix, model, mode, features);
+  if (!range) {
+    return fail("DEVICE_NOT_SUPPORTED", `${prefix} is not listed as an inverter sequence function device for ${model}.`);
+  }
+
+  const warnings = [];
+  const withinRange = address => range.ranges.some(([start, end]) => address >= start && address <= end);
+  let configurationDependent = range.dependent;
+
+  if (mode !== "syntax") {
+    if (!withinRange(parsed.address)) {
+      if (range.serialExtendedTo != null && parsed.address <= range.serialExtendedTo) {
+        return fail("REQUIRES_SERIAL_SUPPORT",
+          `${prefix}${parsed.addressText} needs the 32-point T/ST/C extension, which ${model} only provides from the January 2021 production month onward. Check the SERIAL plate, then use mode "maximum" or frFeatures.extendedTimerPoints.`,
+          { configurationDependent: true, suggestedMode: "maximum" });
+      }
+      return fail("ADDRESS_OUT_OF_RANGE", `${parsed.notationPrefix || prefix}${parsed.addressText} is outside the fixed ${model} range.`);
+    }
+    if (parsed.digit !== null) {
+      const last = parsed.address + parsed.digit * 4 - 1;
+      if (!withinRange(last)) {
+        return fail("DIGIT_RANGE_OVERFLOW", `K${parsed.digit}${prefix}${parsed.addressText} covers ${parsed.digit * 4} points and runs past the end of the ${prefix} range.`);
+      }
+    }
+    if (range.dependent && (prefix === "T" || prefix === "ST" || prefix === "C")) {
+      warnings.push("The 32-point T/ST/C extension depends on the SERIAL production month; pass frFeatures.extendedTimerPoints once it is known.");
+    }
+    if (range.dependent && prefix === "P") {
+      warnings.push("The 256-point P pointer device depends on the SERIAL production month; pass frFeatures.pointerDevice once it is known.");
+    }
+    if (prefix === "X" || prefix === "Y") {
+      const area = frIoArea(parsed.address);
+      if (area && area[3]) {
+        configurationDependent = true;
+        warnings.push(`${prefix}${parsed.addressText} belongs to the ${area[2]} area, which only exists while that network is configured.`);
+      }
+    }
+  }
+
+  const readOnly = mode !== "syntax" && prefix === "X";
+  if (readOnly) {
+    warnings.push("Input device X is refreshed from the terminal or network every scan, so turning it on from the program does not drive the corresponding signal. Use SM1200/SM1255 and SD1148/SD1149 for inverter operation control instead.");
+  }
+  const operationAllowed = operation === "write" ? !readOnly : operation === "read" ? true : null;
+
+  if (mode === "syntax") {
+    return {
+      valid: true, input: value, normalized, series, model, mode, operation, code: "VALID",
+      message: "Valid inverter sequence function device syntax; range and access were not evaluated in syntax mode.",
+      configurationDependent: false, access: "not-evaluated", operationAllowed: null,
+      warnings: [], parsed, source: SOURCES[series]
+    };
+  }
+
+  return {
+    valid: true, input: value, normalized, series, model, mode, operation, code: "VALID",
+    message: operation === "write" && readOnly
+      ? "Valid device notation and fixed range, but X is an input image that the program cannot drive."
+      : configurationDependent
+        ? "Valid within the fixed inverter sequence function range; confirm the inverter SERIAL and network configuration."
+        : "Valid within the fixed inverter sequence function range.",
+    configurationDependent,
+    access: readOnly ? "read-only" : "read-write",
+    operationAllowed,
+    warnings,
+    parsed,
+    source: SOURCES[series]
+  };
+}
+
 function analyzeDevice(value, options = {}) {
   const mode = options.mode || "default";
   const inputMode = options.inputMode || "exact";
@@ -597,7 +807,7 @@ function analyzeDevice(value, options = {}) {
   }
   const series = canonicalSeries(options.series);
   if (!series) return invalid(value, null, null, mode, "UNSUPPORTED_SERIES", `Supported series: ${SERIES.join(", ")}.`);
-  const seriesModel = cr800ModelFromSeries(options.series);
+  const seriesModel = modelFromSeries(options.series);
   const model = normalizeModel(options.series, options.model ?? seriesModel);
   if (!model) return invalid(value, series, null, mode, "UNSUPPORTED_MODEL", `Unsupported ${series} model: ${String(options.model)}.`);
   if (seriesModel && model !== seriesModel) return invalid(value, series, model, mode, "MODEL_SERIES_MISMATCH", `${String(options.series)} conflicts with model ${model}.`);
@@ -605,11 +815,16 @@ function analyzeDevice(value, options = {}) {
     const featureError = validateCr800Features(options.cr800Features);
     if (featureError) return invalid(value, series, model, mode, "INVALID_CR800_FEATURES", featureError);
   }
+  if (series === "FR800") {
+    const featureError = validateFrFeatures(options.frFeatures, model);
+    if (featureError) return invalid(value, series, model, mode, "INVALID_FR_FEATURES", featureError);
+  }
   const parsed = parseDevice(value, { series, inputMode });
   const normalized = inputMode === "friendly" ? normalizeDevice(value) : (typeof value === "string" ? value : null);
   if (!parsed) return invalid(value, series, model, mode, "INVALID_SYNTAX", "The value is not a supported MELSEC/MELFA device notation.", { normalized });
 
   if (series === "CR800") return analyzeCr800(value, parsed, series, model, mode, normalized, operation, options.cr800Features);
+  if (series === "FR800") return analyzeFr(value, parsed, series, model, mode, normalized, operation, options.frFeatures);
 
   if (series === "iQ-F" && ["V", "LT", "LST", "ZR", "RD", "FX", "FY", "FD"].includes(parsed.prefix)) {
     return invalid(value, series, model, mode, "DEVICE_NOT_SUPPORTED", `${parsed.prefix} is not listed as an iQ-F device in the attached manual.`, { normalized, parsed });

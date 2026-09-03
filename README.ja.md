@@ -2,9 +2,9 @@
 
 [English](README.md)
 
-三菱電機 MELSEC / MXコントローラ および MELFAロボットコントローラのデバイス表記を、シリーズとCPU／コントローラ型名を含めて検証する、依存ライブラリなしのnpmパッケージです。
+三菱電機 MELSEC / MXコントローラ、MELFAロボットコントローラ、およびFRインバータのシーケンス機能のデバイス表記を、シリーズとCPU／コントローラ／インバータ型名を含めて検証する、依存ライブラリなしのnpmパッケージです。
 
-対応シリーズは iQ-R、iQ-F、MX-R、MX-F、CR800-R/D/Qです。ES Modules と CommonJS の両方から利用できます。
+対応シリーズは iQ-R、iQ-F、MX-R、MX-F、CR800-R/D/Q、および FR-A800／A800 Plus／F800／E800 シーケンス機能です。ES Modules と CommonJS の両方から利用できます。
 
 ## インストール
 
@@ -46,7 +46,7 @@ isValidDevice("U3E0\\G524287", {
 
 `analyzeDevice` は、単なる `true` / `false` ではなく、正規化後の型名、解釈したデバイス、失敗理由、参照マニュアルとページ、実機設定への依存有無を返します。入力欄のバリデーションにはこちらを推奨します。
 
-`model`を省略できるのは、`series`に`CR800-R`、`CR800-D`、`CR800-Q`のいずれかを直接指定した場合だけです。その他のシリーズでは従来どおり型名を指定してください。
+`model`を省略できるのは、`series`に`CR800-R`、`CR800-D`、`CR800-Q`、`FR-A800`、`FR-F800`、`FR-E800`のような単一機種のショートハンドを直接指定した場合です。`iQ-R`、`iQ-F`、`MX-R`、`MX-F`、`CR800`、`FR800`では従来どおり型名を指定してください。
 
 ## 判定モード
 
@@ -59,7 +59,7 @@ PLCのM/D等はCPUパラメータで点数を変更できるため、型名だ�
 | `configured` | 実機プロジェクトの厳密判定 | `configuredPoints` に渡した実際の点数で判定。可変デバイスの点数が未指定なら `MISSING_CONFIGURATION`。 |
 | `syntax` | エディタ入力途中・構文チェック | 型名が対応するデバイス文法のみを確認し、点数範囲を無視。 |
 
-CR800-R/D/Qのデバイス範囲はマニュアル上固定されているため、`default`、`maximum`、`configured`はいずれも同じ固定範囲を使用します。
+CR800-R/D/QおよびFRインバータのデバイス範囲はマニュアル上固定されているため、これらのシリーズでは`configuredPoints`を参照しません。ただしインバータでは、`maximum`が後述のSERIAL依存のT/ST/C 32点拡張を許可する点だけが異なります。
 
 ```js
 isValidDevice("D99", {
@@ -182,6 +182,73 @@ CR800-Qの表6-16にある`U3En\G512-G1023`は、表6-13の固定範囲`G10000-G
 
 定数（`K100`, `HFF`, 実数・文字列）は「デバイス」ではないため判定対象外です。ラベル、構造体メンバ、SLMPのバイナリデバイスコードも対象外です。
 
+## FRインバータ シーケンス機能
+
+FR-A800／A800 Plus／F800／E800のシーケンス機能はデバイステーブルが1種類に固定されているため、シリーズを`FR800`、インバータのファミリを型名として扱います。単一ファミリのショートハンドを`series`に直接指定した場合は`model`を省略できます。
+
+```js
+isValidDevice("X8F", { series: "FR-A800" }); // true（Xは16進で144点）
+isValidDevice("X90", { series: "FR-A800" }); // false
+
+analyzeDevice("P100", { series: "FR-E800" });
+// valid: true, configurationDependent: true（PデバイスはSERIALの製造年月に依存）
+
+analyzeDevice("P100", { series: "FR-A800" }).code; // "DEVICE_NOT_SUPPORTED"
+```
+
+| デバイス | FR-A800 / FR-A800 Plus / FR-F800 | FR-E800 | 基数 |
+| --- | --- | --- | --- |
+| X、Y | `X0～X8F`、`Y0～Y8F`（各144点） | 同左 | 16進 |
+| M | `M0～M127` | 同左 | 10進 |
+| L | 点数なし（シーケンスパラメータで設定可能だがラッチしない） | 同左 | - |
+| T、ST、C | `0～15`、または下記拡張で`0～31` | `0～15` | 10進 |
+| D | `D0～D255` | 同左 | 10進 |
+| P | 記載なし | `P0～P127`、`P2048～P2175` | 10進 |
+| SM、SD | `0～2047`（機能制限あり） | 同左 | 10進 |
+| N | `N0～N14`（MC/MCRのネスティング） | 同左 | 10進 |
+
+### SERIAL（製造年月）依存機能
+
+マニュアルには、インバータ定格名板のSERIALが示す製造年月によって対応可否が変わるデバイス機能が2つ記載されています。型名だけでは断定できないため、暗黙に許可せず別扱いで返します。
+
+```js
+analyzeDevice("T16", { series: "FR-A800" });
+// valid: false, code: "REQUIRES_SERIAL_SUPPORT", suggestedMode: "maximum"
+
+isValidDevice("T16", { series: "FR-A800", mode: "maximum" });                            // true（設定依存）
+isValidDevice("T16", { series: "FR-A800", frFeatures: { extendedTimerPoints: true } });  // true（確定）
+isValidDevice("T16", { series: "FR-A800", frFeatures: { extendedTimerPoints: false } }); // false
+```
+
+| `frFeatures` | 対象 | 意味 |
+| --- | --- | --- |
+| `extendedTimerPoints` | FR-A800、FR-A800-CRN、FR-A800-LC、FR-F800 | T/ST/Cの32点対応 |
+| `pointerDevice` | FR-E800系 | Pデバイス256点対応 |
+
+マニュアルが対応と記載していない型名に対して`true`を指定した場合は、範囲を黙って広げず`INVALID_FR_FEATURES`を返します。
+
+### 桁指定と入力デバイス
+
+桁指定はビットデバイスX、Y、Mのみに記載があります。本パッケージは、指定した点数がデバイス範囲内に収まるかも判定します。
+
+```js
+isValidDevice("K4X80", { series: "FR-A800" });            // true（X80～X8F）
+analyzeDevice("K4X8C", { series: "FR-A800" }).code;       // "DIGIT_RANGE_OVERFLOW"
+analyzeDevice("K4D0", { series: "FR-A800" }).code;        // "DIGIT_MODIFIER_NOT_SUPPORTED"
+```
+
+入力デバイスXは毎スキャン外部端子やネットワークからリフレッシュされるため、プログラムから駆動できません。`analyzeDevice`はCR800と同じフィールドでこれを返します。
+
+```js
+analyzeDevice("X0", { series: "FR-A800", operation: "write" });
+// valid: true, access: "read-only", operationAllowed: false
+// warnings: インバータ運転状態制御にはSM1200/SM1255、SD1148/SD1149を使用する旨
+```
+
+X/Yの`30H`以降はCC-Linkリモート入出力（`30H～3FH`）とEthernetインバータ間リンク入出力（`40H～8FH`）の領域であるため、領域名を含む警告とともに`configurationDependent: true`を返します。
+
+ビット指定、間接指定、インデックス修飾、ローカルデバイス、ユニットアクセス、および`TS`/`TC`/`TN`形式の接点・コイル・現在値表記は、シーケンス機能のマニュアルに記載がないため保守的に無効とします。
+
 ## API
 
 ### `isValidDevice(value, options): boolean`
@@ -219,6 +286,7 @@ CR800-Qの表6-16にある`U3En\G512-G1023`は、表6-13の固定範囲`G10000-G
 - MX-R: MXR300-16/-32/-64、MXR500-128/-256
 - MX-F: MXF100系のマニュアル対象10機種（`MXF100` をファミリ別名として受付）
 - MELFA CR800: CR800-R、CR800-D、CR800-Q
+- FRインバータ（`FR800`）: FR-A800、FR-A800-P、FR-A800-CRN、FR-A800-LC、FR-A800-Plus、FR-F800、FR-E800、FR-E800-E、FR-E800-SCE、FR-E800-NC、FR-E806
 
 ## 資料
 

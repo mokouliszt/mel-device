@@ -2,9 +2,9 @@
 
 [日本語](README.ja.md)
 
-A dependency-free npm package for validating Mitsubishi Electric MELSEC/MX controller and MELFA robot controller device notation against a specified series and CPU/controller model.
+A dependency-free npm package for validating Mitsubishi Electric MELSEC/MX controller, MELFA robot controller and FR inverter sequence-function device notation against a specified series and CPU/controller/inverter model.
 
-Supported series are iQ-R, iQ-F, MX-R, MX-F, and CR800-R/D/Q. The package supports both ES Modules and CommonJS.
+Supported series are iQ-R, iQ-F, MX-R, MX-F, CR800-R/D/Q, and the FR-A800/A800 Plus/F800/E800 inverter sequence function. The package supports both ES Modules and CommonJS.
 
 ## Installation
 
@@ -46,7 +46,7 @@ isValidDevice("U3E0\\G524287", {
 
 Instead of returning only `true` or `false`, `analyzeDevice` reports the normalized model, parsed device, reason for failure, referenced manual and page, and whether the result depends on the actual hardware configuration. It is the recommended API for validating user input.
 
-The `model` option may be omitted only when `series` is set directly to `CR800-R`, `CR800-D`, or `CR800-Q`. A model must still be specified for all other series.
+The `model` option may be omitted when `series` is set directly to a single-model shorthand such as `CR800-R`, `CR800-D`, `CR800-Q`, `FR-A800`, `FR-F800`, or `FR-E800`. A model must still be specified for `iQ-R`, `iQ-F`, `MX-R`, `MX-F`, `CR800`, and `FR800`.
 
 ## Validation modes
 
@@ -59,7 +59,7 @@ The number of available points for PLC devices such as M and D can be changed in
 | `configured` | Exact validation for an actual project | Validates against the actual point counts supplied in `configuredPoints`. Returns `MISSING_CONFIGURATION` if the point count for a configurable device is omitted. |
 | `syntax` | In-progress editor input and syntax checking | Checks only whether the model supports the device syntax and ignores point-count ranges. |
 
-The device ranges for CR800-R/D/Q are fixed in the manuals, so `default`, `maximum`, and `configured` all use the same fixed ranges.
+The device ranges for CR800-R/D/Q and for the FR inverter sequence function are fixed in the manuals, so `configuredPoints` is ignored for those series. `maximum` still differs for the inverters, because it opts into the SERIAL-dependent 32-point T/ST/C extension described below.
 
 ```js
 isValidDevice("D99", {
@@ -182,6 +182,73 @@ Bit specifications, digit specifications, indirect specifications, index modific
 
 Constants (`K100`, `HFF`, real numbers, and strings) are outside the validation scope because they are not devices. Labels, structure members, and SLMP binary device codes are also outside the scope.
 
+## FR inverter sequence function
+
+The FR-A800/A800 Plus/F800/E800 sequence function has one fixed device table, so the series is `FR800` and the inverter family is the model. Single-family shorthands are accepted as `series`, in which case `model` may be omitted.
+
+```js
+isValidDevice("X8F", { series: "FR-A800" }); // true (X is hexadecimal, 144 points)
+isValidDevice("X90", { series: "FR-A800" }); // false
+
+analyzeDevice("P100", { series: "FR-E800" });
+// valid: true, configurationDependent: true (the P device depends on the SERIAL production month)
+
+analyzeDevice("P100", { series: "FR-A800" }).code; // "DEVICE_NOT_SUPPORTED"
+```
+
+| Device | FR-A800 / FR-A800 Plus / FR-F800 | FR-E800 | Radix |
+| --- | --- | --- | --- |
+| X, Y | `X0-X8F`, `Y0-Y8F` (144 points each) | same | hexadecimal |
+| M | `M0-M127` | same | decimal |
+| L | no points (a latch range can be set but nothing latches) | same | - |
+| T, ST, C | `0-15`, or `0-31` with the extension below | `0-15` | decimal |
+| D | `D0-D255` | same | decimal |
+| P | not listed | `P0-P127`, `P2048-P2175` | decimal |
+| SM, SD | `0-2047` (not every number has a function) | same | decimal |
+| N | `N0-N14` (MC/MCR nesting) | same | decimal |
+
+### SERIAL-dependent features
+
+The manual lists two device features whose availability depends on the inverter production month printed on the SERIAL plate. Because the model name alone cannot decide them, they are reported separately instead of being silently allowed.
+
+```js
+analyzeDevice("T16", { series: "FR-A800" });
+// valid: false, code: "REQUIRES_SERIAL_SUPPORT", suggestedMode: "maximum"
+
+isValidDevice("T16", { series: "FR-A800", mode: "maximum" });                       // true (configurationDependent)
+isValidDevice("T16", { series: "FR-A800", frFeatures: { extendedTimerPoints: true } });  // true (asserted)
+isValidDevice("T16", { series: "FR-A800", frFeatures: { extendedTimerPoints: false } }); // false
+```
+
+| `frFeatures` | Applies to | Meaning |
+| --- | --- | --- |
+| `extendedTimerPoints` | FR-A800, FR-A800-CRN, FR-A800-LC, FR-F800 | 32-point T/ST/C extension |
+| `pointerDevice` | FR-E800 family | 256-point P pointer device |
+
+Setting a feature to `true` for a model the manual does not list returns `INVALID_FR_FEATURES` rather than quietly widening the range.
+
+### Digit designation and input devices
+
+Digit designation is documented for the bit devices X, Y, and M only, and the package also checks that the designated points fit inside the device range.
+
+```js
+isValidDevice("K4X80", { series: "FR-A800" });            // true (X80-X8F)
+analyzeDevice("K4X8C", { series: "FR-A800" }).code;       // "DIGIT_RANGE_OVERFLOW"
+analyzeDevice("K4D0", { series: "FR-A800" }).code;        // "DIGIT_MODIFIER_NOT_SUPPORTED"
+```
+
+Input device X is refreshed from the terminal or network on every scan, so a program cannot drive it. `analyzeDevice` reports this through the same fields used for CR800:
+
+```js
+analyzeDevice("X0", { series: "FR-A800", operation: "write" });
+// valid: true, access: "read-only", operationAllowed: false
+// warnings: use SM1200/SM1255 and SD1148/SD1149 for inverter operation control
+```
+
+X/Y addresses from `30H` upward belong to the CC-Link remote area (`30H-3FH`) and the Ethernet inverter-to-inverter link area (`40H-8FH`), so they return `configurationDependent: true` with a warning naming the area.
+
+Bit selection, indirect specification, index modification, local devices, module access, and the `TS`/`TC`/`TN` style contact/coil/current notation are not documented for the inverter sequence function and are conservatively rejected.
+
 ## API
 
 ### `isValidDevice(value, options): boolean`
@@ -219,6 +286,7 @@ Returns the list of models covered by the manuals.
 - MX-R: MXR300-16/-32/-64 and MXR500-128/-256
 - MX-F: the 10 models covered by the MXF100-series manual (`MXF100` is accepted as a family alias)
 - MELFA CR800: CR800-R, CR800-D, and CR800-Q
+- FR inverters (`FR800`): FR-A800, FR-A800-P, FR-A800-CRN, FR-A800-LC, FR-A800-Plus, FR-F800, FR-E800, FR-E800-E, FR-E800-SCE, FR-E800-NC, and FR-E806
 
 ## References
 

@@ -295,3 +295,91 @@ test("keeps CR800 validation conservative and fixed", () => {
   }).code, "INVALID_CR800_FEATURES");
   assert.equal(analyzeDevice("D0", { series: "CR800-R" }).source.manual, "BFP-A3477-AB");
 });
+
+test("resolves inverter series shorthands and model aliases", () => {
+  assert.equal(normalizeModel("FR-A800"), "FR-A800");
+  assert.equal(normalizeModel("FR800", "A800-CRN"), "FR-A800-CRN");
+  assert.equal(normalizeModel("FR800", "e806"), "FR-E806");
+  assert.equal(normalizeModel("FR800", "FR-A700"), null);
+  assert.deepEqual(getSupportedModels("FR-F800"), ["FR-F800"]);
+  assert.ok(getSupportedModels("FR800").includes("FR-E800-SCE"));
+  assert.equal(analyzeDevice("D0", { series: "FR-A800", model: "FR-F800" }).code, "MODEL_SERIES_MISMATCH");
+  assert.equal(analyzeDevice("D0", { series: "FR-A800" }).source.manual, "IB-0600491-Q");
+});
+
+test("applies the fixed inverter device ranges", () => {
+  assert.equal(isValidDevice("X8F", { series: "FR-A800" }), true);
+  assert.equal(isValidDevice("X90", { series: "FR-A800" }), false);
+  assert.equal(isValidDevice("Y8F", { series: "FR-E800" }), true);
+  assert.equal(isValidDevice("M127", { series: "FR-F800" }), true);
+  assert.equal(isValidDevice("M128", { series: "FR-F800" }), false);
+  assert.equal(isValidDevice("D255", { series: "FR800", model: "FR-E806" }), true);
+  assert.equal(isValidDevice("D256", { series: "FR800", model: "FR-E806" }), false);
+  assert.equal(isValidDevice("SM2047", { series: "FR-A800" }), true);
+  assert.equal(isValidDevice("SD2048", { series: "FR-A800" }), false);
+  assert.equal(isValidDevice("N14", { series: "FR-F800" }), true);
+  assert.equal(isValidDevice("N15", { series: "FR-F800" }), false);
+  assert.equal(analyzeDevice("L0", { series: "FR-A800" }).code, "DEVICE_NOT_SUPPORTED");
+  assert.equal(parseDevice("X8F", { series: "FR-A800" }).address, 0x8f);
+});
+
+test("separates the SERIAL-dependent 32-point T/ST/C extension", () => {
+  assert.equal(isValidDevice("T15", { series: "FR-A800" }), true);
+  const pending = analyzeDevice("ST16", { series: "FR-A800" });
+  assert.equal(pending.valid, false);
+  assert.equal(pending.code, "REQUIRES_SERIAL_SUPPORT");
+  assert.equal(pending.suggestedMode, "maximum");
+  assert.equal(isValidDevice("C31", { series: "FR-F800", mode: "maximum" }), true);
+  assert.equal(isValidDevice("C32", { series: "FR-F800", mode: "maximum" }), false);
+  assert.equal(isValidDevice("T16", { series: "FR-A800", frFeatures: { extendedTimerPoints: true } }), true);
+  assert.equal(isValidDevice("T16", { series: "FR-A800", frFeatures: { extendedTimerPoints: false } }), false);
+  assert.equal(analyzeDevice("T31", { series: "FR-A800", mode: "maximum" }).configurationDependent, true);
+
+  assert.equal(analyzeDevice("T16", { series: "FR-A800-Plus", mode: "maximum" }).code, "ADDRESS_OUT_OF_RANGE");
+  assert.equal(analyzeDevice("T16", { series: "FR-E800", mode: "maximum" }).code, "ADDRESS_OUT_OF_RANGE");
+  assert.equal(analyzeDevice("T0", {
+    series: "FR-E800", frFeatures: { extendedTimerPoints: true }
+  }).code, "INVALID_FR_FEATURES");
+});
+
+test("limits the P pointer device to FR-E800", () => {
+  assert.equal(isValidDevice("P127", { series: "FR-E800" }), true);
+  assert.equal(isValidDevice("P128", { series: "FR-E800" }), false);
+  assert.equal(isValidDevice("P2048", { series: "FR-E800-NC" }), true);
+  assert.equal(isValidDevice("P2176", { series: "FR-E800-NC" }), false);
+  assert.equal(analyzeDevice("P0", { series: "FR-E800" }).configurationDependent, true);
+  assert.equal(analyzeDevice("P0", { series: "FR-E800", frFeatures: { pointerDevice: true } }).configurationDependent, false);
+  assert.equal(analyzeDevice("P0", { series: "FR-A800" }).code, "DEVICE_NOT_SUPPORTED");
+});
+
+test("validates inverter digit designation and rejects undocumented modifiers", () => {
+  assert.equal(isValidDevice("K4X80", { series: "FR-A800" }), true);
+  assert.equal(analyzeDevice("K4X8C", { series: "FR-A800" }).code, "DIGIT_RANGE_OVERFLOW");
+  assert.equal(isValidDevice("K8M96", { series: "FR-A800" }), true);
+  assert.equal(analyzeDevice("K8M97", { series: "FR-A800" }).code, "DIGIT_RANGE_OVERFLOW");
+  assert.equal(analyzeDevice("K4D0", { series: "FR-A800" }).code, "DIGIT_MODIFIER_NOT_SUPPORTED");
+  assert.equal(analyzeDevice("D0.A", { series: "FR-A800" }).code, "MODIFIER_NOT_SUPPORTED");
+  assert.equal(analyzeDevice("@D0", { series: "FR-A800" }).code, "MODIFIER_NOT_SUPPORTED");
+  assert.equal(analyzeDevice("D0Z0", { series: "FR-A800" }).code, "MODIFIER_NOT_SUPPORTED");
+  assert.equal(analyzeDevice("TS0", { series: "FR-A800" }).code, "DEVICE_NOT_SUPPORTED");
+  assert.equal(analyzeDevice("U0\\G0", { series: "FR-A800" }).code, "DEVICE_NOT_SUPPORTED");
+  assert.equal(isValidDevice("D999", { series: "FR-A800", mode: "syntax" }), true);
+  assert.equal(isValidDevice("D999", { series: "FR-A800", mode: "configured", configuredPoints: { D: 9999 } }), false);
+  assert.equal(isValidDevice(" ｄ０ ", { series: "FR-E800", inputMode: "friendly" }), true);
+});
+
+test("reports inverter X as an input image and flags network I/O areas", () => {
+  const write = analyzeDevice("X0", { series: "FR-A800", operation: "write" });
+  assert.equal(write.valid, true);
+  assert.equal(write.access, "read-only");
+  assert.equal(write.operationAllowed, false);
+  assert.match(write.warnings.join(" "), /SM1200/);
+  assert.equal(analyzeDevice("Y0", { series: "FR-A800", operation: "write" }).operationAllowed, true);
+
+  assert.equal(analyzeDevice("X0", { series: "FR-A800" }).configurationDependent, false);
+  const link = analyzeDevice("X40", { series: "FR-E800-E" });
+  assert.equal(link.configurationDependent, true);
+  assert.match(link.warnings.join(" "), /Ethernet/);
+  assert.equal(analyzeDevice("Y30", { series: "FR-A800" }).configurationDependent, true);
+  assert.equal(analyzeDevice("D0", { series: "FR-A800", frFeatures: { unknown: true } }).code, "INVALID_FR_FEATURES");
+});

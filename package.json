@@ -1,7 +1,7 @@
 {
   "name": "@mokouliszt/mel-device",
-  "version": "0.3.1",
-  "description": "Model-aware Mitsubishi MELSEC and MELFA device notation validator.",
+  "version": "0.4.0",
+  "description": "Model-aware Mitsubishi MELSEC, MELFA and FR inverter device notation validator.",
   "license": "MIT",
   "author": "mokouliszt",
   "type": "module",
@@ -37,7 +37,11 @@
     "mx-r",
     "mx-f",
     "cr800",
-    "melfa"
+    "melfa",
+    "inverter",
+    "fr-a800",
+    "fr-f800",
+    "fr-e800"
   ],
   "engines": {
     "node": ">=18"
